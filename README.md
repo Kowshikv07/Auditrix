@@ -90,7 +90,7 @@ Every `step()` and `reset()` returns an `AuditObservation`:
 
 ## Compliance Rules
 
-Nine deterministic rules across four real-world domains:
+Ten deterministic rules across five real-world domains:
 
 | Rule | Condition | Domain | Edge Cases |
 |---|---|---|---|
@@ -130,7 +130,7 @@ Nine deterministic rules across four real-world domains:
 
 ## Tasks
 
-Five tasks across three difficulty levels:
+Six tasks across three difficulty levels:
 
 | Task ID | Difficulty | Records | Active Rules | Violation Pairs | Max Steps |
 |---|---|---|---|---|---|
@@ -139,6 +139,7 @@ Five tasks across three difficulty levels:
 | `hard_complex_audit` | 🔴 Hard | 20 | R1–R5 | 15 | 100 |
 | `finance_sox_audit` | 🔴 Hard | 15 | R3, R6, R7, R8 | 17 | 80 |
 | `gdpr_privacy_audit` | 🟡 Medium | 10 | R5, R8, R9 | 9 | 50 |
+| `data_integrity_audit` | 🟡 Medium | 8 | R3, R4, R10 | 6 | 40 |
 
 ---
 
@@ -303,7 +304,7 @@ export API_BASE_URL="https://router.huggingface.co/v1"
 export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
 export HF_TOKEN="hf_..."
 
-# Run all 5 tasks
+# Run all 6 tasks
 python inference.py
 
 # Run specific tasks only
@@ -323,6 +324,7 @@ Scores from `Qwen/Qwen2.5-72B-Instruct` via HF inference router (temperature=0, 
 | hard_complex_audit | 🔴 Hard | ~0.58 |
 | finance_sox_audit | 🔴 Hard | ~0.61 |
 | gdpr_privacy_audit | 🟡 Medium | ~0.72 |
+| data_integrity_audit | 🟡 Medium | ~0.74 |
 | **Average** | | **~0.72** |
 
 > Scores are fully reproducible: same model + seed → identical output. Run `python inference.py` to reproduce.
@@ -338,13 +340,13 @@ openenv/
 │   ├── environment.py              # ComplianceAuditEnv (reset / step / state)
 │   ├── graders.py                  # Deterministic scoring (Easy / Medium / Hard graders)
 │   ├── models.py                   # Pydantic typed models
-│   ├── rules.py                    # Rule engine — R1 through R9
+│   ├── rules.py                    # Rule engine — R1 through R10
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
-│   └── tasks.py                    # 5 task definitions with ground-truth violations
+│   └── tasks.py                    # 6 task definitions with ground-truth violations
 ├── tests/
 │   └── test_environment.py         # 29-test pytest suite
 ├── inference.py                    # Baseline LLM inference script
-├── openenv.yaml                    # OpenEnv metadata (v1.1.0)
+├── openenv.yaml                    # OpenEnv metadata (v1.2.0)
 ├── pyproject.toml
 ├── Dockerfile
 ├── requirements.txt

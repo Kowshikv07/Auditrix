@@ -9,9 +9,9 @@ Mandatory environment variables:
 Run:
     python inference.py [--tasks easy_basic_audit medium_mixed_audit ...]
 
-The script runs all 5 tasks (easy → medium → hard → finance_sox → gdpr_privacy),
+The script runs all 6 tasks (easy → medium → hard → finance_sox → gdpr_privacy → data_integrity),
 prints per-step details, and prints a final score table.
-Expected runtime < 30 min on 2 vCPU / 8 GB RAM.
+Expected runtime < 20 min on 2 vCPU / 8 GB RAM.
 """
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ MAX_TOKENS = 256
 FALLBACK_FINISH = {"action_type": "finish", "record_id": None, "rule_id": None}
 
 # ---------------------------------------------------------------------------
-# System prompt — covers all 9 rules so the agent reasons correctly
+# System prompt — covers all 10 rules so the agent reasons correctly
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
 You are an AI compliance auditor agent operating inside an OpenEnv environment.
@@ -298,7 +298,7 @@ def main() -> None:
         nargs="*",
         default=list(TASKS.keys()),
         choices=list(TASKS.keys()),
-        help="Task IDs to run (default: all 5)",
+        help="Task IDs to run (default: all 6)",
     )
     args = parser.parse_args()
 
