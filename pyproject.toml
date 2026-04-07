@@ -20,4 +20,4 @@ dependencies = [
 server = "server.app:main"
 
 [tool.setuptools]
-packages = ["openenv_compliance_audit", "openenv_ticket_triage"]
+packages = ["openenv_compliance_audit"]
