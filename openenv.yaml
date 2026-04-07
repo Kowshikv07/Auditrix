@@ -68,7 +68,7 @@ tasks:
     title: Full Regulatory Compliance Audit
     objective: >
       Audit 20 records against all 5 rules with overlapping violations, expired
-      contracts (R5), and boundary edge cases. 16 violation pairs.
+      contracts (R5), and boundary edge cases. 15 violation pairs.
 
   - id: finance_sox_audit
     difficulty: hard

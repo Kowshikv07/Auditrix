@@ -83,6 +83,8 @@ R8  Missing compliance train — status == 'active' AND compliance_training != T
                                ⚠ Inactive employees are EXEMPT from this rule
 R9  GDPR consent missing     — pii_access == True AND gdpr_consent != True
                                ⚠ If pii_access is False/absent, rule does NOT apply
+R10 Missing required fields  — any of {id,name,role,hours,salary} is missing or null
+                               ⚠ Zero values are valid; only missing/null is a violation
 
 Only rules listed in 'available_rules' are active for the current task.
 

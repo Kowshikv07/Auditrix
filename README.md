@@ -103,6 +103,7 @@ Ten deterministic rules across five real-world domains:
 | **R7** | `hours > 48 and overtime_approved != True` | Labour law (EU WTD / FLSA) | `hours == 48` → compliant (strict >) |
 | **R8** | `status == "active" and compliance_training != True` | SOX § 301 / GDPR Art. 39 | Inactive employees → exempt |
 | **R9** | `pii_access == True and gdpr_consent != True` | GDPR Art. 7 / CCPA | `pii_access == False` → exempt |
+| **R10** | Missing one or more required fields (`id`, `name`, `role`, `hours`, `salary`) | Data integrity | `0` is valid; only missing/`null` triggers |
 
 ### Salary ranges by role (R3)
 

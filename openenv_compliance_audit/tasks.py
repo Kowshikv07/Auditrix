@@ -4,7 +4,7 @@ Five tasks across three difficulty levels:
 
   easy   — 5 records,  2 rules (R1, R2),          2 clear violations
   medium — 12 records, 4 rules (R1-R4),            9 violations; hidden & overlapping
-  hard   — 20 records, 5 rules (R1-R5),           16 violation pairs; edge cases
+    hard   — 20 records, 5 rules (R1-R5),           15 violation pairs; edge cases
   ── NEW real-world tasks ──────────────────────────────────────────────────────
   finance_sox_audit  — 15 finance-dept records, rules R3/R6/R7/R8 (SOX-style)
                        Salary overrides, missing background checks, unapproved
