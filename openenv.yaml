@@ -1,0 +1,51 @@
+id: openenv-ticket-triage
+name: OpenEnv Ticket Triage
+version: 0.1.0
+description: >
+  A deterministic, real-world customer support ticket triage environment for evaluating
+  agentic workflows including prioritization, routing, compliance escalation, and resolution.
+author: Kowshik
+license: MIT
+
+tags:
+  - openenv
+  - customer-support
+  - ticket-triage
+  - operations
+  - deterministic-evaluation
+  - real-world
+
+entrypoint:
+  module: openenv_ticket_triage.server
+  app: app
+
+interface:
+  reset: /reset
+  step: /step
+  state: /state
+  tasks: /tasks
+
+models:
+  action: openenv_ticket_triage.models.TicketTriageAction
+  observation: openenv_ticket_triage.models.TicketTriageObservation
+  reward: openenv_ticket_triage.models.TicketTriageReward
+  state: openenv_ticket_triage.models.TicketTriageState
+
+tasks:
+  - id: easy_refund_priority
+    difficulty: easy
+    title: Urgent Refund Ticket
+    objective: Correctly triage and resolve one urgent refund case.
+  - id: medium_mixed_queue
+    difficulty: medium
+    title: Mixed Support Queue
+    objective: Route and prioritize three distinct tickets; request required follow-up.
+  - id: hard_regulated_incident
+    difficulty: hard
+    title: Regulated Incident Triage
+    objective: Handle compliance-critical incidents with safe, efficient resolution.
+
+huggingface:
+  sdk: docker
+  tags:
+    - openenv
