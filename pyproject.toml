@@ -3,20 +3,21 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "openenv-ticket-triage"
-version = "0.1.0"
-description = "Deterministic OpenEnv environment for real-world customer support ticket triage"
+name = "openenv-compliance-audit"
+version = "1.0.0"
+description = "Deterministic OpenEnv environment for real-world AI compliance auditing"
 requires-python = ">=3.10"
 dependencies = [
   "fastapi>=0.116.1",
   "uvicorn[standard]>=0.35.0",
   "pydantic>=2.11.7",
-  "openai>=1.99.9",
+  "openai>=1.0.0",
   "openenv-core>=0.2.0",
+  "PyYAML>=6.0.2",
 ]
 
 [project.scripts]
 server = "server.app:main"
 
 [tool.setuptools]
-packages = ["openenv_ticket_triage"]
+packages = ["openenv_compliance_audit", "openenv_ticket_triage"]
