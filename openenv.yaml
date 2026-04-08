@@ -1,6 +1,6 @@
 id: openenv-compliance-audit
 name: OpenEnv Compliance Audit
-version: 1.2.0
+version: 1.0.0
 description: >
   A deterministic, real-world compliance audit environment where an AI agent
   inspects structured organisational records, applies configurable compliance

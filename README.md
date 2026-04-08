@@ -409,9 +409,9 @@ openenv/
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
 │   └── tasks.py                    # 6 task definitions with ground-truth violations
 ├── tests/
-│   └── test_environment.py         # 29-test pytest suite
+│   └── test_environment.py         # 46-test pytest suite
 ├── inference.py                    # Baseline LLM inference script
-├── openenv.yaml                    # OpenEnv metadata (v1.2.0)
+├── openenv.yaml                    # OpenEnv metadata (v1.0.0)
 ├── pyproject.toml
 ├── Dockerfile
 ├── requirements.txt
@@ -442,7 +442,7 @@ openenv/
 ### 1) OpenEnv validate
 
 ```text
-[OK] openenv: Ready for multi-mode deployment
+[OK] Auditrix: Ready for multi-mode deployment
 ```
 
 ### 2) Unit tests
