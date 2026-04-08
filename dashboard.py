@@ -81,6 +81,10 @@ def load_benchmark_data():
             return pd.DataFrame()
         
         df = pd.DataFrame(records)
+
+        # Normalize older log schema to the dashboard's expected column names.
+        if 'model_name' not in df.columns and 'model' in df.columns:
+            df = df.rename(columns={'model': 'model_name'})
         
         # Parse timestamps
         if 'timestamp' in df.columns:
@@ -97,7 +101,16 @@ def load_baseline_scores():
     try:
         resp = requests.get("https://kowshik147-auditrix.hf.space/baseline", timeout=10)
         if resp.status_code == 200:
-            return resp.json()
+            baseline_payload = resp.json()
+
+            # Normalize the live API response into a shape the dashboard can use directly.
+            task_scores = {
+                item.get('task_id'): item.get('score', 0)
+                for item in baseline_payload.get('tasks', [])
+                if item.get('task_id')
+            }
+            baseline_payload['scores'] = task_scores
+            return baseline_payload
         return None
     except Exception as e:
         st.warning(f"Could not fetch baseline scores: {e}")
@@ -106,6 +119,18 @@ def load_baseline_scores():
 # Load data
 benchmark_df = load_benchmark_data()
 baseline_data = load_baseline_scores()
+
+if not benchmark_df.empty and 'model_name' in benchmark_df.columns:
+    discovered_models = sorted(benchmark_df['model_name'].dropna().unique().tolist())
+else:
+    discovered_models = []
+
+comparison_targets = [
+    "Qwen/Qwen2.5-72B-Instruct",
+    "meta-llama/Llama-3.1-70B-Instruct",
+    "mistralai/Mistral-Large-Instruct-2407",
+    "google/gemma-2-27b-it",
+]
 
 # Sidebar filters
 st.sidebar.title("📊 Dashboard Controls")
@@ -126,12 +151,11 @@ selected_tasks = st.sidebar.multiselect(
 )
 
 # Model filter (if inference data exists)
-if not benchmark_df.empty and 'model_name' in benchmark_df.columns:
-    available_models = benchmark_df['model_name'].unique().tolist()
+if discovered_models:
     selected_models = st.sidebar.multiselect(
         "Filter by Model:",
-        available_models,
-        default=available_models
+        discovered_models,
+        default=discovered_models
     )
 else:
     selected_models = []
@@ -168,13 +192,19 @@ with tab1:
         st.dataframe(
             baseline_df_sorted,
             use_container_width=True,
-            height=150
+            height=120
         )
         
         st.info(f"✅ Baseline Mean Score: **{baseline_data.get('mean_score', 0):.4f}**")
     
     if data_source in ["Inference Runs (LLM)", "All Data"] and not benchmark_df.empty:
         st.write("### LLM Model Rankings (Inference Runs)")
+        
+        if len(discovered_models) <= 1:
+            st.info(
+                "Only one model is currently present in the benchmark log. "
+                "Add more benchmark runs to compare multiple models here."
+            )
         
         # Filter data
         filtered_df = benchmark_df.copy()
@@ -213,6 +243,22 @@ with tab1:
                 st.metric("Models", len(model_stats))
         else:
             st.warning("No inference data available. Run inference.py to populate data.")
+
+        if discovered_models:
+            st.write("### Discovered Models")
+            model_summary = pd.DataFrame({
+                "Model": discovered_models,
+                "Runs": [int((benchmark_df['model_name'] == model).sum()) for model in discovered_models]
+            })
+            st.dataframe(model_summary, use_container_width=True, height=140)
+
+        st.write("### Suggested Comparison Targets")
+        comparison_df = pd.DataFrame({
+            "Model": comparison_targets,
+            "Status": ["Benchmarked" if model in discovered_models else "Not benchmarked yet" for model in comparison_targets],
+            "Runs": [int((benchmark_df['model_name'] == model).sum()) if model in discovered_models else 0 for model in comparison_targets],
+        })
+        st.dataframe(comparison_df, use_container_width=True, height=180)
     
     if data_source == "All Data" and benchmark_df.empty and not baseline_data:
         st.warning("No data available. Please run inference or check baseline endpoint.")
@@ -356,6 +402,7 @@ with tab4:
     - **Leaderboard:** Model rankings by average score
     - **Performance Charts:** Visualize trends and distributions
     - **Detailed Results:** Filter and sort inference runs
+    - **Comparison Targets:** Suggested additional models to benchmark
     - **Real-time Data:** Automatic updates from `model-benchmark-logs/`
     
     ### 🔗 Links:
