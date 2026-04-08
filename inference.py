@@ -1,17 +1,14 @@
-"""
-Inference Script — OpenEnv Compliance Audit Environment
-========================================================
+"""Inference script for OpenEnv Compliance Audit.
+
 Mandatory environment variables:
-    API_BASE_URL   LLM endpoint base URL (e.g. https://router.huggingface.co/v1)
-    MODEL_NAME     Model identifier
-    HF_TOKEN       Hugging Face / API key
+    API_BASE_URL
+    MODEL_NAME
+    HF_TOKEN
 
-Run:
-    python inference.py [--tasks easy_basic_audit medium_mixed_audit ...]
-
-The script runs all 6 tasks (easy → medium → hard → finance_sox → gdpr_privacy → data_integrity),
-prints per-step details, and prints a final score table.
-Expected runtime < 20 min on 2 vCPU / 8 GB RAM.
+This script emits strict evaluator logs in this format:
+    [START] task=<task_name> env=<benchmark> model=<model_name>
+    [STEP] step=<n> action=<action_str> reward=<0.00> done=<true|false> error=<msg|null>
+    [END] success=<true|false> steps=<n> score=<score> rewards=<r1,r2,...,rn>
 """
 from __future__ import annotations
 
@@ -19,6 +16,8 @@ import argparse
 import json
 import os
 import re
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openai import OpenAI
@@ -35,6 +34,8 @@ API_KEY: Optional[str] = (
     os.getenv("HF_TOKEN") or os.getenv("API_KEY") or os.getenv("OPENAI_API_KEY")
 )
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+BENCHMARK = os.getenv("BENCHMARK", "openenv_compliance_audit")
+RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", "model-benchmark-logs/inference_runs.jsonl")
 
 # ---------------------------------------------------------------------------
 # Inference hyper-parameters
@@ -124,6 +125,25 @@ def _extract_json(text: str) -> Dict[str, Any]:
         raise
 
 
+def _bool_text(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _fmt_reward(value: float) -> str:
+    return f"{value:.2f}"
+
+
+def _fmt_action(action: AuditAction) -> str:
+    payload = {
+        "action_type": action.action_type.value,
+        "record_id": action.record_id,
+        "rule_id": action.rule_id,
+    }
+    if action.report is not None:
+        payload["report"] = action.report
+    return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+
 def _fallback_action(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Heuristic fallback when the model produces unparseable output.
 
@@ -176,6 +196,7 @@ def _choose_action(
     obs_dict: Dict[str, Any],
     history: List[str],
     step: int,
+    model_name: str,
 ) -> Dict[str, Any]:
     """Ask the LLM for the next action."""
     user_content: List[Dict[str, Any]] = [
@@ -206,7 +227,7 @@ def _choose_action(
 
     try:
         completion = client.chat.completions.create(
-            model=MODEL_NAME,
+            model=model_name,
             messages=messages,
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
@@ -215,7 +236,6 @@ def _choose_action(
         )
         response_text = completion.choices[0].message.content or ""
     except Exception as exc:  # noqa: BLE001
-        print(f"  [WARN] Model request failed ({exc}). Using fallback action.")
         return _fallback_action(obs_dict)
 
     try:
@@ -228,7 +248,14 @@ def _choose_action(
     return payload
 
 
-def run_task(client: OpenAI, task_id: str) -> float:
+def _append_run_log(entry: Dict[str, Any]) -> None:
+    path = Path(RUN_LOG_PATH)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
+
+
+def run_task(client: OpenAI, task_id: str, model_name: str) -> float:
     """Run one full episode and return the final task score."""
     env = ComplianceAuditEnv(task_id=task_id)
     obs = env.reset().model_dump()
@@ -236,22 +263,15 @@ def run_task(client: OpenAI, task_id: str) -> float:
     step = 0
     history: List[str] = []
     score = 0.0
+    rewards: List[float] = []
+    success = False
 
-    task_meta = TASKS[task_id]
-    total_violations = sum(len(r.expected_violations) for r in task_meta.records)
-    print(
-        f"\n{'='*65}\n[TASK] {task_id}\n"
-        f"       Difficulty : {task_meta.difficulty.upper()}\n"
-        f"       Records    : {len(task_meta.records)}\n"
-        f"       Rules      : {task_meta.active_rule_ids}\n"
-        f"       Violations : {total_violations} (ground truth)\n"
-        f"       Max steps  : {task_meta.max_steps}\n{'='*65}"
-    )
+    print(f"[START] task={task_id} env={BENCHMARK} model={model_name}")
 
     try:
         while not done:
             step += 1
-            payload = _choose_action(client, obs, history, step)
+            payload = _choose_action(client, obs, history, step, model_name)
 
             try:
                 action = AuditAction.model_validate(payload)
@@ -262,34 +282,50 @@ def run_task(client: OpenAI, task_id: str) -> float:
             obs = result.observation.model_dump()
             done = result.done
             reward = float(result.reward)
+            rewards.append(reward)
             score = float(result.info.get("task_score", 0.0))
-            error = obs.get("last_action_error") or "—"
+            error_value = obs.get("last_action_error")
+            error_text = str(error_value) if error_value else "null"
 
-            action_str = json.dumps(
-                {"t": action.action_type.value, "rec": action.record_id, "rule": action.rule_id},
-                separators=(",", ":"),
-            )
+            action_str = _fmt_action(action)
             history.append(f"step={step} {action_str} reward={reward:+.2f}")
-
             print(
-                f"  Step {step:3d}: {action_str:<58} "
-                f"reward={reward:+.2f}  score={score:.3f}  err={error}"
+                f"[STEP] step={step} action={action_str} "
+                f"reward={_fmt_reward(reward)} done={_bool_text(done)} error={error_text}"
             )
 
-            if result.done:
-                print("  → Episode complete.")
-                break
-
-            if step >= task_meta.max_steps:
-                print(f"  → Max steps ({task_meta.max_steps}) reached.")
+            if done:
+                success = score >= 0.1
                 break
 
     except Exception as exc:
-        print(f"  [ERROR] {exc}")
+        print(
+            f"[STEP] step={step} action=null reward={_fmt_reward(0.0)} "
+            f"done=true error={str(exc)}"
+        )
+        success = False
     finally:
         env.close()
 
-    print(f"[RESULT] task={task_id}  final_score={score:.4f}  steps_used={step}")
+    rewards_text = ",".join(_fmt_reward(r) for r in rewards)
+    print(
+        f"[END] success={_bool_text(success)} steps={step} "
+        f"score={score:.2f} rewards={rewards_text}"
+    )
+
+    _append_run_log(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "benchmark": BENCHMARK,
+            "task_id": task_id,
+            "model": model_name,
+            "score": round(score, 4),
+            "steps": step,
+            "success": success,
+            "rewards": [round(item, 4) for item in rewards],
+        }
+    )
+
     return score
 
 
@@ -302,6 +338,15 @@ def main() -> None:
         choices=list(TASKS.keys()),
         help="Task IDs to run (default: all 6)",
     )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        default=None,
+        help=(
+            "One or more model names for comparison mode. "
+            "If omitted, uses MODEL_NAME from environment."
+        ),
+    )
     args = parser.parse_args()
 
     if not API_KEY:
@@ -311,20 +356,27 @@ def main() -> None:
 
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
-    scores: Dict[str, float] = {}
-    for task_id in args.tasks:
-        scores[task_id] = run_task(client, task_id)
+    models = args.models if args.models else [MODEL_NAME]
+    model_scores: Dict[str, Dict[str, float]] = {}
 
-    avg = sum(scores.values()) / len(scores) if scores else 0.0
+    for model_name in models:
+        scores: Dict[str, float] = {}
+        for task_id in args.tasks:
+            scores[task_id] = run_task(client, task_id, model_name)
+        model_scores[model_name] = scores
 
-    print(f"\n{'='*65}")
-    print("FINAL SCORES")
-    print(f"{'='*65}")
-    for tid, sc in scores.items():
-        diff = TASKS[tid].difficulty.upper()
-        print(f"  {tid:<38} [{diff:>6}]  {sc:.4f}")
-    print(f"  {'AVERAGE':<38}          {avg:.4f}")
-    print(f"{'='*65}\n")
+    if len(models) > 1:
+        comparison = []
+        for model_name, scores in model_scores.items():
+            mean_score = sum(scores.values()) / max(len(scores), 1)
+            comparison.append({
+                "model": model_name,
+                "mean_score": round(mean_score, 4),
+                "task_scores": {k: round(v, 4) for k, v in scores.items()},
+            })
+
+        comparison.sort(key=lambda item: item["mean_score"], reverse=True)
+        print(json.dumps({"model_comparison": comparison}, ensure_ascii=True))
 
 
 if __name__ == "__main__":

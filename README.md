@@ -287,17 +287,20 @@ uvicorn openenv_compliance_audit.server:app --host 0.0.0.0 --port 7860
 # List available tasks
 curl http://localhost:7860/tasks
 
+# Run deterministic baseline over all tasks
+curl http://localhost:7860/baseline
+
 # Reset and start an episode
 curl -X POST http://localhost:7860/reset \
   -H "Content-Type: application/json" \
-  -d '{"task_id": "finance_sox_audit"}'
+  -d '{"task_id": "finance_sox_audit", "seed": 42}'
 
 # Take a step
 curl -X POST http://localhost:7860/step \
   -H "Content-Type: application/json" \
   -d '{"action_type": "inspect_record", "record_id": "F001"}'
 
-# Run tests (29 tests)
+# Run tests
 pytest tests/ -v
 ```
 
@@ -320,6 +323,9 @@ python inference.py
 
 # Run specific tasks only
 python inference.py --tasks easy_basic_audit finance_sox_audit
+
+# Compare multiple models on the same tasks
+python inference.py --models Qwen/Qwen2.5-72B-Instruct meta-llama/Llama-3.1-70B-Instruct
 ```
 
 ---
@@ -355,7 +361,8 @@ openenv/
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
 │   └── tasks.py                    # 6 task definitions with ground-truth violations
 ├── tests/
-│   └── test_environment.py         # 29-test pytest suite
+│   ├── test_environment.py         # Environment behavior and reward tests
+│   └── test_server.py              # API contract and endpoint safety tests
 ├── inference.py                    # Baseline LLM inference script
 ├── openenv.yaml                    # OpenEnv metadata (v1.2.0)
 ├── pyproject.toml

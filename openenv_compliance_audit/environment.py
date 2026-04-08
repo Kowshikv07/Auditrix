@@ -16,7 +16,7 @@ Episode flow
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from .graders import grader_for_difficulty
 from .models import (
@@ -24,6 +24,7 @@ from .models import (
     AuditAction,
     AuditObservation,
     AuditReward,
+    DecisionTrace,
     AuditState,
     RecordInternalState,
     RecordView,
@@ -45,6 +46,7 @@ class ComplianceAuditEnv:
         self._active_task_id = task_id
         self._state: Optional[AuditState] = None
         self._last_action_sig: Optional[Tuple] = None
+        self._episode_seed: Optional[int] = None
 
     # ------------------------------------------------------------------
     # Public properties
@@ -58,7 +60,7 @@ class ComplianceAuditEnv:
     # OpenEnv API
     # ------------------------------------------------------------------
 
-    def reset(self, task_id: Optional[str] = None) -> AuditObservation:
+    def reset(self, task_id: Optional[str] = None, seed: Optional[int] = None) -> AuditObservation:
         """Initialise a fresh episode and return the initial observation."""
         if task_id is not None:
             if task_id not in TASKS:
@@ -84,6 +86,7 @@ class ComplianceAuditEnv:
             records=records,
         )
         self._last_action_sig = None
+        self._episode_seed = seed
         return self._build_observation()
 
     def step(self, action: AuditAction) -> StepResult:
@@ -131,6 +134,8 @@ class ComplianceAuditEnv:
             self._state.done = True
 
         terminal_bonus = 0.0
+        report_quality_score = 0.0
+        report_quality_components: Dict[str, float] = {}
         if action.action_type in (ActionType.GENERATE_REPORT, ActionType.FINISH):
             self._state.done = True
             grader = grader_for_difficulty(self._state.difficulty)
@@ -140,6 +145,12 @@ class ComplianceAuditEnv:
             terminal_bonus = multiplier * final_score
             reward_components["terminal_bonus"] = round(terminal_bonus, 4)
             reward_value += terminal_bonus
+
+            if action.action_type == ActionType.GENERATE_REPORT and action.report is not None:
+                report_quality_score, report_quality_components = self._score_report_payload(action.report)
+                report_quality_bonus = 0.05 * report_quality_score
+                reward_components["report_quality_bonus"] = round(report_quality_bonus, 4)
+                reward_value += report_quality_bonus
 
         # Clamp to [-1, 1]
         reward_value = max(-1.0, min(1.0, reward_value))
@@ -166,6 +177,8 @@ class ComplianceAuditEnv:
                 "reward_model": reward_model.model_dump(),
                 "task_score": task_score,
                 "difficulty": self._state.difficulty,
+                "report_quality_score": report_quality_score,
+                "report_quality_components": report_quality_components,
             },
         )
 
@@ -188,6 +201,7 @@ class ComplianceAuditEnv:
     ) -> Tuple[float, Dict[str, float]]:
         assert self._state is not None
         components: Dict[str, float] = {}
+        self._state.last_decision_trace = None
 
         # ── generate_report / finish ──────────────────────────────────
         if action.action_type in (ActionType.GENERATE_REPORT, ActionType.FINISH):
@@ -241,6 +255,15 @@ class ComplianceAuditEnv:
             if action.rule_id not in record.rules_applied:
                 record.rules_applied.append(action.rule_id)
 
+            self._state.last_decision_trace = DecisionTrace(
+                action_type=ActionType.APPLY_RULE.value,
+                record_id=action.record_id,
+                rule_id=action.rule_id,
+                outcome="violation_detected" if is_violation else "no_violation",
+                reason_codes=self._reason_codes_for_apply_rule(action.rule_id, is_violation),
+                rule_evidence=self._build_rule_evidence(action.record_id, action.rule_id, is_violation),
+            )
+
             if is_violation:
                 components["rule_hit"] = 0.20
                 return 0.20, components
@@ -260,6 +283,15 @@ class ComplianceAuditEnv:
 
             is_true_violation = action.rule_id in record.expected_violations
             record.flagged_violations.append(action.rule_id)
+
+            self._state.last_decision_trace = DecisionTrace(
+                action_type=ActionType.FLAG_VIOLATION.value,
+                record_id=action.record_id,
+                rule_id=action.rule_id,
+                outcome="flag_correct" if is_true_violation else "flag_false_positive",
+                reason_codes=self._reason_codes_for_flag(is_true_violation),
+                rule_evidence=self._build_flag_evidence(action.record_id, action.rule_id, is_true_violation),
+            )
 
             if is_true_violation:
                 components["flag_correct"] = 0.50
@@ -346,6 +378,7 @@ class ComplianceAuditEnv:
             violations_found=violations_found,
             action_history=list(self._state.action_history),
             last_action_error=self._state.last_action_error,
+            last_decision_trace=self._state.last_decision_trace,
         )
 
     # ------------------------------------------------------------------
@@ -359,4 +392,138 @@ class ComplianceAuditEnv:
             parts.append(f"record_id={action.record_id}")
         if action.rule_id:
             parts.append(f"rule_id={action.rule_id}")
+        if action.report is not None:
+            parts.append("report=provided")
         return "(" + ", ".join(parts) + ")"
+
+    @staticmethod
+    def _reason_codes_for_apply_rule(rule_id: str, is_violation: bool) -> List[str]:
+        status = "rule_condition_met" if is_violation else "rule_condition_not_met"
+        return [status, f"rule_id:{rule_id}"]
+
+    @staticmethod
+    def _reason_codes_for_flag(is_true_violation: bool) -> List[str]:
+        return ["flag_matches_ground_truth"] if is_true_violation else ["false_positive_flag"]
+
+    def _build_rule_evidence(
+        self, record_id: str, rule_id: str, is_violation: bool
+    ) -> Dict[str, Any]:
+        assert self._state is not None
+        fields = self._state.records[record_id].fields
+        candidate_keys = {
+            "R1": ["age", "hours"],
+            "R2": ["role", "hours"],
+            "R3": ["role", "salary"],
+            "R4": ["id"],
+            "R5": ["contract_end", "status"],
+            "R6": ["role", "background_check"],
+            "R7": ["hours", "overtime_approved"],
+            "R8": ["status", "compliance_training"],
+            "R9": ["pii_access", "gdpr_consent"],
+            "R10": ["id", "name", "role", "hours", "salary"],
+        }
+        keys = candidate_keys.get(rule_id, [])
+        evidence_fields = {k: fields.get(k) for k in keys}
+        return {
+            "rule_id": rule_id,
+            "condition": RULES[rule_id].condition_summary if rule_id in RULES else rule_id,
+            "record_fields": evidence_fields,
+            "result": "violation" if is_violation else "compliant",
+        }
+
+    def _build_flag_evidence(
+        self, record_id: str, rule_id: str, is_true_violation: bool
+    ) -> Dict[str, Any]:
+        assert self._state is not None
+        record = self._state.records[record_id]
+        return {
+            "rule_id": rule_id,
+            "expected_violation": is_true_violation,
+            "already_flagged_for_record": list(record.flagged_violations),
+        }
+
+    def _score_report_payload(self, report: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
+        """Score report completeness/consistency in [0, 1]."""
+        assert self._state is not None
+
+        completeness = 0.0
+        has_summary = bool(str(report.get("summary", "")).strip())
+        has_violations = isinstance(report.get("flagged_violations"), list)
+        has_compliant = isinstance(report.get("compliant_records"), list)
+        has_recommendations = bool(report.get("recommendations"))
+
+        completeness += 0.20 if has_summary else 0.0
+        completeness += 0.30 if has_violations else 0.0
+        completeness += 0.20 if has_compliant else 0.0
+        completeness += 0.30 if has_recommendations else 0.0
+
+        expected_pairs: Set[Tuple[str, str]] = set()
+        marked_compliant_expected: Set[str] = set()
+        for rec in self._state.records.values():
+            for rid in rec.flagged_violations:
+                expected_pairs.add((rec.record_id, rid))
+            if rec.marked_compliant:
+                marked_compliant_expected.add(rec.record_id)
+
+        reported_pairs = self._parse_report_pairs(report.get("flagged_violations"))
+        reported_compliant = self._parse_record_ids(report.get("compliant_records"))
+
+        pair_f1 = self._f1_score(expected_pairs, reported_pairs)
+        compliant_f1 = self._f1_score(marked_compliant_expected, reported_compliant)
+        consistency = 0.70 * pair_f1 + 0.30 * compliant_f1
+
+        quality_score = max(0.0, min(1.0, 0.50 * completeness + 0.50 * consistency))
+        components = {
+            "completeness": round(completeness, 4),
+            "consistency": round(consistency, 4),
+            "pair_f1": round(pair_f1, 4),
+            "compliant_f1": round(compliant_f1, 4),
+            "quality_score": round(quality_score, 4),
+        }
+        return quality_score, components
+
+    @staticmethod
+    def _parse_report_pairs(payload: Any) -> Set[Tuple[str, str]]:
+        pairs: Set[Tuple[str, str]] = set()
+        if not isinstance(payload, list):
+            return pairs
+        for item in payload:
+            if isinstance(item, dict):
+                rec = item.get("record_id")
+                rid = item.get("rule_id")
+                if isinstance(rec, str) and isinstance(rid, str):
+                    pairs.add((rec.strip(), rid.strip()))
+            elif isinstance(item, str) and ":" in item:
+                rec, rid = item.split(":", 1)
+                rec = rec.strip()
+                rid = rid.strip()
+                if rec and rid:
+                    pairs.add((rec, rid))
+        return pairs
+
+    @staticmethod
+    def _parse_record_ids(payload: Any) -> Set[str]:
+        rec_ids: Set[str] = set()
+        if not isinstance(payload, list):
+            return rec_ids
+        for item in payload:
+            if isinstance(item, str):
+                rec = item.strip()
+                if rec:
+                    rec_ids.add(rec)
+            elif isinstance(item, dict) and isinstance(item.get("record_id"), str):
+                rec_ids.add(item["record_id"].strip())
+        return rec_ids
+
+    @staticmethod
+    def _f1_score(expected: Set[Any], predicted: Set[Any]) -> float:
+        if not expected and not predicted:
+            return 1.0
+        if not expected or not predicted:
+            return 0.0
+        tp = len(expected.intersection(predicted))
+        precision = tp / len(predicted) if predicted else 0.0
+        recall = tp / len(expected) if expected else 0.0
+        if precision + recall == 0:
+            return 0.0
+        return 2 * precision * recall / (precision + recall)
