@@ -32,7 +32,28 @@ app = FastAPI(
 
 
 @app.get("/")
-def root() -> dict:
+def root() -> HTMLResponse:
+    """Root endpoint redirects to dashboard."""
+    html_content = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Redirecting...</title>
+        <script>
+            window.location.href = '/dashboard';
+        </script>
+    </head>
+    <body>
+        <p>Redirecting to dashboard...</p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
+
+
+@app.get("/api")
+def api_root() -> dict:
+    """Machine-readable API info (JSON)."""
     return {
         "name": "openenv-compliance-audit",
         "version": "1.0.0",
