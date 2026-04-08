@@ -33,22 +33,8 @@ app = FastAPI(
 
 @app.get("/")
 def root() -> HTMLResponse:
-    """Root endpoint redirects to dashboard."""
-    html_content = """
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Redirecting...</title>
-        <script>
-            window.location.href = '/dashboard';
-        </script>
-    </head>
-    <body>
-        <p>Redirecting to dashboard...</p>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html_content)
+    """Root endpoint serves the dashboard directly."""
+    return dashboard_html()
 
 
 @app.get("/api")
