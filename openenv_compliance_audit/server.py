@@ -298,6 +298,13 @@ def dashboard_html() -> HTMLResponse:
                 color: #ffffff;
             }
             tr:hover { background: rgba(148, 163, 184, 0.08); }
+            .average-row {
+                background: #f5f5f5;
+                font-weight: bold;
+            }
+            .average-row td {
+                color: #111827 !important;
+            }
             .api-link {
                 display: inline-block;
                 margin: 5px;
@@ -462,7 +469,7 @@ def dashboard_html() -> HTMLResponse:
                             <td>data_integrity_audit</td>
                             <td><strong>0.74</strong></td>
                         </tr>
-                        <tr style="font-weight: bold; background: #f5f5f5;">
+                        <tr class="average-row">
                             <td>Average</td>
                             <td><strong>0.7217</strong></td>
                         </tr>
