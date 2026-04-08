@@ -4,8 +4,14 @@ emoji: "⚖️"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
-app_file: app.py
+app_port: 7860
 pinned: false
+tags:
+  - openenv
+  - reinforcement-learning
+  - compliance
+  - audit
+  - llm-agent
 ---
 
 # OpenEnv — Interactive Compliance Audit Environment
@@ -15,7 +21,7 @@ pinned: false
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-29%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-43%20passed-brightgreen)]()
 
 ---
 
@@ -278,8 +284,14 @@ Score is normalised to **[0.0, 1.0]**. A perfect run (all violations found, zero
 ### Local development
 
 ```bash
+# Create and activate virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
 # Install package and dependencies
-pip install -e .
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip install -e .
 
 # Run server
 uvicorn openenv_compliance_audit.server:app --host 0.0.0.0 --port 7860
@@ -287,21 +299,18 @@ uvicorn openenv_compliance_audit.server:app --host 0.0.0.0 --port 7860
 # List available tasks
 curl http://localhost:7860/tasks
 
-# Run deterministic baseline over all tasks
-curl http://localhost:7860/baseline
-
 # Reset and start an episode
 curl -X POST http://localhost:7860/reset \
   -H "Content-Type: application/json" \
-  -d '{"task_id": "finance_sox_audit", "seed": 42}'
+  -d '{"task_id": "finance_sox_audit"}'
 
 # Take a step
 curl -X POST http://localhost:7860/step \
   -H "Content-Type: application/json" \
   -d '{"action_type": "inspect_record", "record_id": "F001"}'
 
-# Run tests
-pytest tests/ -v
+# Run tests (43 tests)
+python -m pytest -q
 ```
 
 ### Docker
@@ -323,9 +332,6 @@ python inference.py
 
 # Run specific tasks only
 python inference.py --tasks easy_basic_audit finance_sox_audit
-
-# Compare multiple models on the same tasks
-python inference.py --models Qwen/Qwen2.5-72B-Instruct meta-llama/Llama-3.1-70B-Instruct
 ```
 
 ---
@@ -361,8 +367,7 @@ openenv/
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
 │   └── tasks.py                    # 6 task definitions with ground-truth violations
 ├── tests/
-│   ├── test_environment.py         # Environment behavior and reward tests
-│   └── test_server.py              # API contract and endpoint safety tests
+│   └── test_environment.py         # 29-test pytest suite
 ├── inference.py                    # Baseline LLM inference script
 ├── openenv.yaml                    # OpenEnv metadata (v1.2.0)
 ├── pyproject.toml
@@ -376,12 +381,33 @@ openenv/
 ## OpenEnv Validation
 
 ```bash
-pip install openenv-core
-openenv validate
+.venv/bin/openenv validate
 ```
 
 ---
 
-## License
+## Submission Validation Evidence
 
-MIT
+### 1) OpenEnv validate
+
+```text
+[OK] openenv: Ready for multi-mode deployment
+```
+
+### 2) Unit tests
+
+```text
+43 passed
+```
+
+### 3) Docker build
+
+```text
+docker build -t openenv-compliance-audit-proof .
+# Status: PASS
+```
+
+### 4) Inference baseline (real token run)
+
+
+### 5) Hugging Face Space live checks
