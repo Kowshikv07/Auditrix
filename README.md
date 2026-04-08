@@ -334,6 +334,32 @@ python inference.py
 python inference.py --tasks easy_basic_audit finance_sox_audit
 ```
 
+### 📊 Interactive Model Leaderboard Dashboard
+
+Visualize model performance rankings with an interactive Streamlit dashboard.
+
+```bash
+# Install dashboard dependencies (if not already installed)
+pip install streamlit plotly
+
+# Run the dashboard
+streamlit run dashboard.py
+
+# Open in browser (usually http://localhost:8501)
+```
+
+**Dashboard Features:**
+
+| Feature | Description |
+|---------|-------------|
+| **🏆 Leaderboard** | Rank models by average score across tasks |
+| **📈 Performance Charts** | Beautiful visualizations: score distribution, trends, task difficulty |
+| **📊 Detailed Results** | Filter & sort individual inference runs |
+| **🔧 Interactive Filters** | Select models, tasks, data sources |
+| **📥 Export** | Download leaderboard as CSV |
+
+**Judge-Friendly!** Perfect for hackathon pitches: show live results, beautiful charts, and professional UI. 🎯
+
 ---
 
 ## Baseline Scores
