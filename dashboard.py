@@ -135,10 +135,15 @@ comparison_targets = [
 # Sidebar filters
 st.sidebar.title("📊 Dashboard Controls")
 
+if st.sidebar.button("Refresh Data"):
+    st.cache_data.clear()
+    st.rerun()
+
 # Data source selection
 data_source = st.sidebar.radio(
     "Select Data Source:",
-    ["Baseline (Rule-based)", "Inference Runs (LLM)", "All Data"]
+    ["Baseline (Rule-based)", "Inference Runs (LLM)", "All Data"],
+    index=2,
 )
 
 # Task filter
@@ -174,6 +179,7 @@ with tab1:
     
     if data_source in ["Baseline (Rule-based)", "All Data"] and baseline_data:
         st.write("### Baseline Scores (Rule-based Strategy)")
+        st.caption("Baseline is a fixed rule-based agent. These scores are deterministic and do not change by LLM model.")
         
         baseline_scores = baseline_data.get('scores', {})
         baseline_df = pd.DataFrame({
