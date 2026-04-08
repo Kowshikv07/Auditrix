@@ -17,7 +17,12 @@ dependencies = [
 ]
 
 [project.scripts]
-server = "server.app:main"
+server = "openenv_compliance_audit.server:main"
 
 [tool.setuptools]
 packages = ["openenv_compliance_audit"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
