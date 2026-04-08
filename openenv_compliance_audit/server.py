@@ -231,20 +231,22 @@ def dashboard_html() -> HTMLResponse:
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: radial-gradient(circle at top, #1f2937 0%, #0b1020 45%, #050816 100%);
+                color: #e5e7eb;
                 min-height: 100vh;
                 padding: 40px 20px;
             }
             .container {
                 max-width: 1200px;
                 margin: 0 auto;
-                background: white;
+                background: #0f172a;
                 border-radius: 12px;
-                box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+                box-shadow: 0 24px 80px rgba(0,0,0,0.55);
                 overflow: hidden;
+                border: 1px solid rgba(148, 163, 184, 0.16);
             }
             .header {
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: linear-gradient(135deg, #111827 0%, #312e81 55%, #7c3aed 100%);
                 color: white;
                 padding: 40px;
                 text-align: center;
@@ -261,21 +263,22 @@ def dashboard_html() -> HTMLResponse:
                 margin-bottom: 40px;
             }
             .stat-card {
-                background: #f5f5f5;
+                background: #111827;
                 padding: 20px;
                 border-radius: 8px;
                 text-align: center;
-                border-left: 4px solid #667eea;
+                border-left: 4px solid #8b5cf6;
+                border: 1px solid rgba(148, 163, 184, 0.14);
             }
-            .stat-number { font-size: 2em; font-weight: bold; color: #667eea; }
-            .stat-label { color: #666; margin-top: 5px; }
+            .stat-number { font-size: 2em; font-weight: bold; color: #c4b5fd; }
+            .stat-label { color: #94a3b8; margin-top: 5px; }
             .section {
                 margin-bottom: 40px;
             }
             .section h2 {
-                color: #333;
+                color: #f8fafc;
                 margin-bottom: 20px;
-                border-bottom: 2px solid #667eea;
+                border-bottom: 2px solid #8b5cf6;
                 padding-bottom: 10px;
             }
             table {
@@ -286,41 +289,48 @@ def dashboard_html() -> HTMLResponse:
             th, td {
                 padding: 12px;
                 text-align: left;
-                border-bottom: 1px solid #eee;
+                border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+                color: #e5e7eb;
             }
             th {
-                background: #f5f5f5;
+                background: #111827;
                 font-weight: 600;
-                color: #333;
+                color: #f8fafc;
             }
-            tr:hover { background: #f9f9f9; }
+            tr:hover { background: rgba(148, 163, 184, 0.08); }
             .api-link {
                 display: inline-block;
                 margin: 5px;
                 padding: 8px 16px;
-                background: #667eea;
+                background: #7c3aed;
                 color: white;
                 text-decoration: none;
                 border-radius: 4px;
                 font-size: 0.9em;
             }
             .api-link:hover {
-                background: #764ba2;
+                background: #8b5cf6;
                 text-decoration: none;
             }
             .footer {
-                background: #f5f5f5;
+                background: #111827;
                 padding: 20px;
                 text-align: center;
-                color: #666;
-                border-top: 1px solid #eee;
+                color: #94a3b8;
+                border-top: 1px solid rgba(148, 163, 184, 0.16);
             }
             code {
-                background: #f5f5f5;
+                background: #111827;
                 padding: 2px 6px;
                 border-radius: 3px;
                 font-family: monospace;
                 font-size: 0.9em;
+                color: #c4b5fd;
+            }
+            pre {
+                background: #111827 !important;
+                color: #e5e7eb;
+                border: 1px solid rgba(148, 163, 184, 0.14);
             }
         </style>
     </head>
