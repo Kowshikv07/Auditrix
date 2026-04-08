@@ -13,4 +13,4 @@ COPY . .
 
 EXPOSE 7860
 
-CMD ["uvicorn", "openenv_ticket_triage.server:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["uvicorn", "openenv_compliance_audit.server:app", "--host", "0.0.0.0", "--port", "7860"]

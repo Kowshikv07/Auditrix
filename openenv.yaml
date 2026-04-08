@@ -1,22 +1,41 @@
-id: openenv-ticket-triage
-name: OpenEnv Ticket Triage
-version: 0.1.0
+id: openenv-compliance-audit
+name: OpenEnv Compliance Audit
+version: 1.2.0
 description: >
-  A deterministic, real-world customer support ticket triage environment for evaluating
-  agentic workflows including prioritization, routing, compliance escalation, and resolution.
+  A deterministic, real-world compliance audit environment where an AI agent
+  inspects structured organisational records, applies configurable compliance
+  rules, flags violations, and produces a final audit report.
+
+  Six tasks span three difficulty levels:
+    • easy_basic_audit      — 5 records,  2 rules (R1, R2): minor/intern overhours
+    • medium_mixed_audit    — 12 records, 4 rules (R1-R4): salary, duplicate IDs
+    • hard_complex_audit    — 20 records, 5 rules (R1-R5): expired contracts, edge cases
+    • finance_sox_audit     — 15 records, 4 rules (R3, R6, R7, R8): SOX pre-certification
+    • gdpr_privacy_audit    — 10 records, 3 rules (R5, R8, R9): GDPR data-privacy
+    • data_integrity_audit  —  8 records, 3 rules (R3, R4, R10): missing fields + dup IDs
+
+  Ten rules across five compliance domains:
+    Employment (R1, R2, R7): minor protection, intern caps, overtime law
+    Financial  (R3):         salary band enforcement
+    Data Integrity (R4, R10): duplicate IDs, missing required fields
+    Governance (R5, R6, R8): expired contracts, background checks, training
+    Data Privacy (R9):       GDPR consent for PII access
+
 author: Kowshik
 license: MIT
 
 tags:
   - openenv
-  - customer-support
-  - ticket-triage
-  - operations
+  - compliance-audit
+  - hr
+  - regulatory
+  - sox
+  - gdpr
   - deterministic-evaluation
   - real-world
 
 entrypoint:
-  module: openenv_ticket_triage.server
+  module: openenv_compliance_audit.server
   app: app
 
 interface:
@@ -26,24 +45,58 @@ interface:
   tasks: /tasks
 
 models:
-  action: openenv_ticket_triage.models.TicketTriageAction
-  observation: openenv_ticket_triage.models.TicketTriageObservation
-  reward: openenv_ticket_triage.models.TicketTriageReward
-  state: openenv_ticket_triage.models.TicketTriageState
+  action: openenv_compliance_audit.models.AuditAction
+  observation: openenv_compliance_audit.models.AuditObservation
+  reward: openenv_compliance_audit.models.AuditReward
+  state: openenv_compliance_audit.models.AuditState
 
 tasks:
-  - id: easy_refund_priority
+  - id: easy_basic_audit
     difficulty: easy
-    title: Urgent Refund Ticket
-    objective: Correctly triage and resolve one urgent refund case.
-  - id: medium_mixed_queue
+    title: Basic HR Compliance Audit
+    objective: Audit 5 employee records against 2 rules; find 2 clear violations (R1, R2).
+
+  - id: medium_mixed_audit
     difficulty: medium
-    title: Mixed Support Queue
-    objective: Route and prioritize three distinct tickets; request required follow-up.
-  - id: hard_regulated_incident
+    title: Mixed HR & Payroll Compliance Audit
+    objective: >
+      Audit 12 records against 4 rules with hidden violations, salary range checks
+      (R3), and duplicate employee IDs (R4). 9 violation pairs.
+
+  - id: hard_complex_audit
     difficulty: hard
-    title: Regulated Incident Triage
-    objective: Handle compliance-critical incidents with safe, efficient resolution.
+    title: Full Regulatory Compliance Audit
+    objective: >
+      Audit 20 records against all 5 rules with overlapping violations, expired
+      contracts (R5), and boundary edge cases. 15 violation pairs.
+
+  - id: finance_sox_audit
+    difficulty: hard
+    title: Finance Department SOX Compliance Audit
+    objective: >
+      SOX pre-certification audit of 15 Finance department records.
+      Rules: salary bands (R3), background checks for sensitive roles (R6),
+      unapproved overtime >48 h (R7), missing compliance training (R8).
+      17 violation pairs; includes records violating multiple rules simultaneously.
+
+  - id: gdpr_privacy_audit
+    difficulty: medium
+    title: GDPR Data-Privacy Compliance Audit
+    objective: >
+      GDPR audit of 10 Engineering & Analytics records.
+      Rules: valid/non-expired contracts (R5), annual data-privacy training (R8),
+      GDPR consent for PII data access (R9).
+      9 violation pairs; inactive employees and non-PII staff are exempt.
+
+  - id: data_integrity_audit
+    difficulty: medium
+    title: HR Data Integrity Audit
+    objective: >
+      Data-quality audit of 8 HR records.
+      Rules: salary bands (R3), no duplicate employee IDs (R4), all required
+      fields present — id/name/role/hours/salary (R10).
+      6 violation pairs; key challenge: a record missing salary skips R3
+      gracefully but still triggers R10 (null-safe rule evaluation).
 
 huggingface:
   sdk: docker
