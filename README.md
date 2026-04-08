@@ -192,7 +192,7 @@ Audit 5 employee records against 2 rules. Two clear violations exist (one minor 
 
 ---
 
-### 🔴 Finance Department SOX Compliance Audit *(new)*
+### 🔴 Finance Department SOX Compliance Audit
 
 15 Finance department records simulating an annual **Sarbanes-Oxley (SOX) pre-certification** review. Scenario: the internal audit team must ensure every Finance employee meets four policy requirements before certification.
 
@@ -220,7 +220,7 @@ Audit 5 employee records against 2 rules. Two clear violations exist (one minor 
 
 ---
 
-### 🟡 GDPR Data-Privacy Compliance Audit *(new)*
+### 🟡 GDPR Data-Privacy Compliance Audit
 
 10 Engineering & Analytics records simulating a **quarterly GDPR audit** by the Data Protection Officer (DPO). Tests whether the agent correctly applies exemption logic.
 
