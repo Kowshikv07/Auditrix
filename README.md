@@ -1,6 +1,6 @@
 ---
 title: OpenEnv Compliance Audit
-emoji: "⚖️"
+emoji: "🏴‍☠️"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
