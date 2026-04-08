@@ -21,6 +21,13 @@ class AuditAction(BaseModel):
     action_type: ActionType = Field(description="The action to perform")
     record_id: Optional[str] = Field(default=None, description="Target record ID")
     rule_id: Optional[str] = Field(default=None, description="Rule to apply or flag")
+    report: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Optional structured audit report payload used with generate_report. "
+            "Ignored by other actions."
+        ),
+    )
 
     @field_validator("record_id", "rule_id")
     @classmethod
@@ -44,6 +51,17 @@ class ViolationEntry(BaseModel):
     description: str
 
 
+class DecisionTrace(BaseModel):
+    """Optional explainability trace for apply_rule/flag_violation actions."""
+
+    action_type: Literal["apply_rule", "flag_violation"]
+    record_id: str
+    rule_id: str
+    outcome: str
+    reason_codes: List[str] = Field(default_factory=list)
+    rule_evidence: Optional[Dict[str, Any]] = None
+
+
 class AuditObservation(BaseModel):
     """Observation returned on every step."""
 
@@ -59,6 +77,7 @@ class AuditObservation(BaseModel):
     violations_found: List[ViolationEntry]
     action_history: List[str]
     last_action_error: Optional[str] = None
+    last_decision_trace: Optional[DecisionTrace] = None
 
 
 class AuditReward(BaseModel):
@@ -97,6 +116,7 @@ class AuditState(BaseModel):
     penalties: float = 0.0
     records: Dict[str, RecordInternalState] = Field(default_factory=dict)
     report_generated: bool = False
+    last_decision_trace: Optional[DecisionTrace] = None
 
 
 class StepResult(BaseModel):
