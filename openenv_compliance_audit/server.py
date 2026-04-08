@@ -232,27 +232,72 @@ def dashboard_html() -> HTMLResponse:
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
+            :root {
+                --bg-primary: #f5f7fa;
+                --bg-secondary: #ffffff;
+                --bg-tertiary: #fbfcfe;
+                --text-primary: #202124;
+                --text-secondary: #5f6368;
+                --border-color: #e6e8eb;
+                --border-light: #e8eaed;
+                --border-lighter: #eceff3;
+                --link-color: #1a73e8;
+                --link-bg-hover: #eef4ff;
+                --link-border: #d2e3fc;
+                --header-border: #eceff3;
+                --table-header-bg: #f8f9fb;
+                --table-row-hover: #f7faff;
+                --table-accent: #eef4ff;
+                --table-accent-text: #123a70;
+                --code-bg: #f1f3f4;
+            }
+            body.dark-mode {
+                --bg-primary: #1a1a1a;
+                --bg-secondary: #242424;
+                --bg-tertiary: #2d2d2d;
+                --text-primary: #e8e8e8;
+                --text-secondary: #b0b0b0;
+                --border-color: #3a3a3a;
+                --border-light: #404040;
+                --border-lighter: #454545;
+                --link-color: #6bb3ff;
+                --link-bg-hover: #1e3a52;
+                --link-border: #2a4a6a;
+                --header-border: #333333;
+                --table-header-bg: #2d2d2d;
+                --table-row-hover: #2a2a2a;
+                --table-accent: #1e3a52;
+                --table-accent-text: #7fb3e5;
+                --code-bg: #2d2d2d;
+            }
             body {
                 font-family: "Google Sans", "Roboto", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
-                background: #f5f7fa;
-                color: #202124;
+                background: var(--bg-primary);
+                color: var(--text-primary);
                 min-height: 100vh;
                 padding: 28px 16px;
+                transition: background-color 0.3s, color 0.3s;
             }
             .container {
                 max-width: 1120px;
                 margin: 0 auto;
-                background: #ffffff;
+                background: var(--bg-secondary);
                 border-radius: 14px;
                 box-shadow: 0 8px 28px rgba(60, 64, 67, 0.12);
                 overflow: hidden;
-                border: 1px solid #e6e8eb;
+                border: 1px solid var(--border-color);
             }
             .header {
-                background: #ffffff;
-                color: #202124;
+                background: var(--bg-secondary);
+                color: var(--text-primary);
                 padding: 30px 34px 22px 34px;
-                border-bottom: 1px solid #eceff3;
+                border-bottom: 1px solid var(--header-border);
+                display: flex;
+                justify-content: space-between;
+                align-items: flex-start;
+            }
+            .header-content {
+                flex: 1;
             }
             .header h1 {
                 font-size: 1.9rem;
@@ -262,8 +307,37 @@ def dashboard_html() -> HTMLResponse:
             }
             .header p {
                 font-size: 0.98rem;
-                color: #5f6368;
+                color: var(--text-secondary);
                 max-width: 880px;
+            }
+            .theme-toggle {
+                width: 40px;
+                height: 20px;
+                background: var(--bg-tertiary);
+                border: 1px solid var(--border-light);
+                border-radius: 20px;
+                cursor: pointer;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                padding: 2px;
+                transition: background-color 0.3s, border-color 0.3s;
+                position: relative;
+            }
+            .theme-toggle.dark-mode-active {
+                justify-content: flex-end;
+            }
+            .theme-toggle::after {
+                content: '';
+                width: 18px;
+                height: 18px;
+                background: var(--bg-secondary);
+                border-radius: 18px;
+                transition: all 0.3s;
+                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            }
+            .theme-toggle:hover {
+                border-color: var(--link-border);
             }
             .content {
                 padding: 26px 34px 34px 34px;
@@ -275,24 +349,27 @@ def dashboard_html() -> HTMLResponse:
                 margin-bottom: 28px;
             }
             .stat-card {
-                background: #fbfcfe;
+                background: var(--bg-tertiary);
                 padding: 16px;
                 border-radius: 10px;
                 text-align: center;
-                border: 1px solid #e4e9f1;
+                border: 1px solid var(--border-lighter);
             }
-            .stat-number { font-size: 1.72rem; font-weight: 700; color: #1a73e8; }
-            .stat-label { color: #5f6368; margin-top: 4px; font-size: 0.92rem; }
+            .stat-number { font-size: 1.72rem; font-weight: 700; color: var(--link-color); }
+            .stat-label { color: var(--text-secondary); margin-top: 4px; font-size: 0.92rem; }
             .section {
                 margin-bottom: 28px;
             }
             .section h2 {
-                color: #202124;
+                color: var(--text-primary);
                 margin-bottom: 14px;
                 font-size: 1.1rem;
                 font-weight: 600;
                 padding-bottom: 8px;
-                border-bottom: 1px solid #e8eaed;
+                border-bottom: 1px solid var(--border-light);
+            }
+            .section p {
+                color: var(--text-secondary);
             }
             table {
                 width: 100%;
@@ -303,64 +380,70 @@ def dashboard_html() -> HTMLResponse:
             th, td {
                 padding: 11px 10px;
                 text-align: left;
-                border-bottom: 1px solid #eceff3;
-                color: #202124;
+                border-bottom: 1px solid var(--border-lighter);
+                color: var(--text-primary);
             }
             th {
-                background: #f8f9fb;
+                background: var(--table-header-bg);
                 font-weight: 600;
-                color: #3c4043;
+                color: var(--text-primary);
             }
-            tr:hover { background: #f7faff; }
+            tr:hover { background: var(--table-row-hover); }
             .average-row {
-                background: #eef4ff;
+                background: var(--table-accent);
                 font-weight: bold;
             }
             .average-row td {
-                color: #123a70 !important;
+                color: var(--table-accent-text) !important;
             }
             .api-link {
                 display: inline-block;
                 margin: 5px 6px 0 0;
                 padding: 7px 14px;
-                background: #ffffff;
-                color: #1a73e8;
+                background: var(--bg-secondary);
+                color: var(--link-color);
                 text-decoration: none;
-                border: 1px solid #d2e3fc;
+                border: 1px solid var(--link-border);
                 border-radius: 999px;
                 font-size: 0.9em;
             }
             .api-link:hover {
-                background: #eef4ff;
+                background: var(--link-bg-hover);
                 text-decoration: none;
             }
             .footer {
-                background: #f8f9fb;
+                background: var(--table-header-bg);
                 padding: 16px;
                 text-align: center;
-                color: #5f6368;
-                border-top: 1px solid #e8eaed;
+                color: var(--text-secondary);
+                border-top: 1px solid var(--border-light);
             }
             code {
-                background: #f1f3f4;
+                background: var(--code-bg);
                 padding: 2px 6px;
                 border-radius: 3px;
                 font-family: monospace;
                 font-size: 0.9em;
-                color: #202124;
+                color: var(--text-primary);
             }
             pre {
-                background: #f8f9fb !important;
-                color: #1f2937;
-                border: 1px solid #e8eaed;
+                background: var(--table-header-bg) !important;
+                color: var(--text-primary);
+                border: 1px solid var(--border-light);
+            }
+            a[style*="color"] {
+                color: var(--link-color) !important;
             }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>OpenEnv Compliance Audit</h1>
-                <p>Interactive Environment for Evaluating AI Agents on Compliance Audit Tasks</p>
+                <div class="header-content">
+                    <h1>OpenEnv Compliance Audit</h1>
+                    <p>Interactive Environment for Evaluating AI Agents on Compliance Audit Tasks</p>
+                </div>
+                <button class="theme-toggle" id="themeToggle" title="Toggle dark mode"></button>
             </div>
             
             <div class="content">
@@ -445,9 +528,9 @@ def dashboard_html() -> HTMLResponse:
                         <a href="/health" class="api-link">GET /health</a>
                         <a href="/tasks" class="api-link">GET /tasks</a>
                         <a href="/baseline" class="api-link">GET /baseline</a>
-                        <a href="/docs" class="api-link">📖 Interactive API Docs</a>
+                        <a href="/docs" class="api-link">Interactive API Docs</a>
                     </div>
-                    <p style="margin-top: 20px; font-size: 0.9em; color: #666;">
+                    <p style="margin-top: 20px; font-size: 0.9em; color: var(--text-secondary);">
                         POST requests: <code>/reset</code>, <code>/step</code>, <code>/state</code>
                     </p>
                 </div>
@@ -494,7 +577,7 @@ def dashboard_html() -> HTMLResponse:
                 <div class="section">
                     <h2>Quick Start</h2>
                     <p>Start an episode and take actions:</p>
-                    <pre style="background: #f5f5f5; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em;">
+                    <pre style="padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em;">
 # Reset environment
 curl -X POST http://localhost:7860/reset \\
   -H "Content-Type: application/json" \\
@@ -512,9 +595,26 @@ curl -X POST http://localhost:7860/step \\
             </div>
             
             <div class="footer">
-                <p>OpenEnv Compliance Audit | <a href="https://github.com/Kowshikv07/Auditrix" style="color: #1a73e8;">GitHub</a> | OpenEnv Framework</p>
+                <p>OpenEnv Compliance Audit | <a href="https://github.com/Kowshikv07/Auditrix" style="color: var(--link-color);">GitHub</a> | OpenEnv Framework</p>
             </div>
         </div>
+        <script>
+            const themeToggle = document.getElementById('themeToggle');
+            const body = document.body;
+            const savedTheme = localStorage.getItem('theme');
+            
+            if (savedTheme === 'dark') {
+                body.classList.add('dark-mode');
+                themeToggle.classList.add('dark-mode-active');
+            }
+            
+            themeToggle.addEventListener('click', () => {
+                body.classList.toggle('dark-mode');
+                themeToggle.classList.toggle('dark-mode-active');
+                const isDarkMode = body.classList.contains('dark-mode');
+                localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+            });
+        </script>
     </body>
     </html>
     """
