@@ -35,6 +35,9 @@ API_KEY: Optional[str] = (
 )
 MODEL_NAME: str = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 BENCHMARK = os.getenv("BENCHMARK", "openenv_compliance_audit")
+# Required by some evaluators when environments are started from docker images.
+# Not used by this script because it runs the local environment class directly.
+LOCAL_IMAGE_NAME: Optional[str] = os.getenv("LOCAL_IMAGE_NAME")
 RUN_LOG_PATH = os.getenv("RUN_LOG_PATH", "model-benchmark-logs/inference_runs.jsonl")
 
 # ---------------------------------------------------------------------------
@@ -283,7 +286,7 @@ def run_task(client: OpenAI, task_id: str, model_name: str) -> float:
             done = result.done
             reward = float(result.reward)
             rewards.append(reward)
-            score = float(result.info.get("task_score", 0.0))
+            score = max(0.0, min(1.0, float(result.info.get("task_score", 0.0))))
             error_value = obs.get("last_action_error")
             error_text = str(error_value) if error_value else "null"
 
@@ -365,18 +368,7 @@ def main() -> None:
             scores[task_id] = run_task(client, task_id, model_name)
         model_scores[model_name] = scores
 
-    if len(models) > 1:
-        comparison = []
-        for model_name, scores in model_scores.items():
-            mean_score = sum(scores.values()) / max(len(scores), 1)
-            comparison.append({
-                "model": model_name,
-                "mean_score": round(mean_score, 4),
-                "task_scores": {k: round(v, 4) for k, v in scores.items()},
-            })
-
-        comparison.sort(key=lambda item: item["mean_score"], reverse=True)
-        print(json.dumps({"model_comparison": comparison}, ensure_ascii=True))
+    # Keep stdout strictly limited to [START]/[STEP]/[END] lines for evaluator parsers.
 
 
 if __name__ == "__main__":
