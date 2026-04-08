@@ -1,7 +1,7 @@
 """FastAPI server exposing the OpenEnv compliance audit environment."""
 from __future__ import annotations
 
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from .environment import ComplianceAuditEnv
@@ -67,9 +67,17 @@ def reset_get(task_id: str | None = None) -> dict:
 
 
 @app.post("/reset")
-def reset_post(payload: ResetRequest | None = Body(default=None)) -> dict:
-    task_id = payload.task_id if payload is not None else None
-    observation = env.reset(task_id=task_id)
+async def reset_post(request: Request, task_id: str | None = None) -> dict:
+    body_task_id: str | None = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            body_task_id = body.get("task_id")
+    except Exception:
+        # Accept empty or non-JSON POST bodies and fall back to query/default.
+        body_task_id = None
+
+    observation = env.reset(task_id=body_task_id or task_id)
     return {"observation": observation.model_dump()}
 
 
