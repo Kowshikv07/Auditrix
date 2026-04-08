@@ -1,7 +1,7 @@
 """FastAPI server exposing the OpenEnv compliance audit environment."""
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from .environment import ComplianceAuditEnv
@@ -67,8 +67,9 @@ def reset_get(task_id: str | None = None) -> dict:
 
 
 @app.post("/reset")
-def reset_post(payload: ResetRequest) -> dict:
-    observation = env.reset(task_id=payload.task_id)
+def reset_post(payload: ResetRequest | None = Body(default=None)) -> dict:
+    task_id = payload.task_id if payload is not None else None
+    observation = env.reset(task_id=task_id)
     return {"observation": observation.model_dump()}
 
 
@@ -80,7 +81,12 @@ def step(action: AuditAction) -> dict:
 
 @app.get("/state")
 def state() -> dict:
-    return env.state().model_dump()
+    try:
+        return env.state().model_dump()
+    except RuntimeError as exc:
+        # Return a client error instead of an internal server error when state
+        # is requested before a task is initialized.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def run_server() -> None:
@@ -90,3 +96,8 @@ def run_server() -> None:
         port=7860,
         log_level="info",
     )
+
+
+def main() -> None:
+    """Console entrypoint expected by OpenEnv validators."""
+    run_server()
