@@ -226,125 +226,140 @@ def dashboard_html() -> HTMLResponse:
         <title>OpenEnv Compliance Audit - Leaderboard</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
         <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-                background: radial-gradient(circle at top, #1f2937 0%, #0b1020 45%, #050816 100%);
-                color: #f8fafc;
+                font-family: "Google Sans", "Roboto", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
+                background: #f5f7fa;
+                color: #202124;
                 min-height: 100vh;
-                padding: 40px 20px;
+                padding: 28px 16px;
             }
             .container {
-                max-width: 1200px;
+                max-width: 1120px;
                 margin: 0 auto;
-                background: #0f172a;
-                border-radius: 12px;
-                box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+                background: #ffffff;
+                border-radius: 14px;
+                box-shadow: 0 8px 28px rgba(60, 64, 67, 0.12);
                 overflow: hidden;
-                border: 1px solid rgba(148, 163, 184, 0.16);
+                border: 1px solid #e6e8eb;
             }
             .header {
-                background: linear-gradient(135deg, #111827 0%, #312e81 55%, #7c3aed 100%);
-                color: white;
-                padding: 40px;
-                text-align: center;
+                background: #ffffff;
+                color: #202124;
+                padding: 30px 34px 22px 34px;
+                border-bottom: 1px solid #eceff3;
             }
-            .header h1 { font-size: 2.5em; margin-bottom: 10px; }
-            .header p { font-size: 1.1em; opacity: 0.9; }
+            .header h1 {
+                font-size: 1.9rem;
+                font-weight: 700;
+                letter-spacing: 0.2px;
+                margin-bottom: 8px;
+            }
+            .header p {
+                font-size: 0.98rem;
+                color: #5f6368;
+                max-width: 880px;
+            }
             .content {
-                padding: 40px;
+                padding: 26px 34px 34px 34px;
             }
             .stats-grid {
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                gap: 20px;
-                margin-bottom: 40px;
+                gap: 14px;
+                margin-bottom: 28px;
             }
             .stat-card {
-                background: #111827;
-                padding: 20px;
-                border-radius: 8px;
+                background: #fbfcfe;
+                padding: 16px;
+                border-radius: 10px;
                 text-align: center;
-                border-left: 4px solid #8b5cf6;
-                border: 1px solid rgba(148, 163, 184, 0.14);
+                border: 1px solid #e4e9f1;
             }
-            .stat-number { font-size: 2em; font-weight: bold; color: #c4b5fd; }
-            .stat-label { color: #94a3b8; margin-top: 5px; }
+            .stat-number { font-size: 1.72rem; font-weight: 700; color: #1a73e8; }
+            .stat-label { color: #5f6368; margin-top: 4px; font-size: 0.92rem; }
             .section {
-                margin-bottom: 40px;
+                margin-bottom: 28px;
             }
             .section h2 {
-                color: #ffffff;
-                margin-bottom: 20px;
-                border-bottom: 2px solid #8b5cf6;
-                padding-bottom: 10px;
+                color: #202124;
+                margin-bottom: 14px;
+                font-size: 1.1rem;
+                font-weight: 600;
+                padding-bottom: 8px;
+                border-bottom: 1px solid #e8eaed;
             }
             table {
                 width: 100%;
                 border-collapse: collapse;
                 margin-top: 10px;
+                font-size: 0.94rem;
             }
             th, td {
-                padding: 12px;
+                padding: 11px 10px;
                 text-align: left;
-                border-bottom: 1px solid rgba(148, 163, 184, 0.18);
-                color: #e5e7eb;
+                border-bottom: 1px solid #eceff3;
+                color: #202124;
             }
             th {
-                background: #111827;
+                background: #f8f9fb;
                 font-weight: 600;
-                color: #ffffff;
+                color: #3c4043;
             }
-            tr:hover { background: rgba(148, 163, 184, 0.08); }
+            tr:hover { background: #f7faff; }
             .average-row {
-                background: #f5f5f5;
+                background: #eef4ff;
                 font-weight: bold;
             }
             .average-row td {
-                color: #111827 !important;
+                color: #123a70 !important;
             }
             .api-link {
                 display: inline-block;
-                margin: 5px;
-                padding: 8px 16px;
-                background: #7c3aed;
-                color: white;
+                margin: 5px 6px 0 0;
+                padding: 7px 14px;
+                background: #ffffff;
+                color: #1a73e8;
                 text-decoration: none;
-                border-radius: 4px;
+                border: 1px solid #d2e3fc;
+                border-radius: 999px;
                 font-size: 0.9em;
             }
             .api-link:hover {
-                background: #8b5cf6;
+                background: #eef4ff;
                 text-decoration: none;
             }
             .footer {
-                background: #111827;
-                padding: 20px;
+                background: #f8f9fb;
+                padding: 16px;
                 text-align: center;
-                color: #cbd5e1;
-                border-top: 1px solid rgba(148, 163, 184, 0.16);
+                color: #5f6368;
+                border-top: 1px solid #e8eaed;
             }
             code {
-                background: #111827;
+                background: #f1f3f4;
                 padding: 2px 6px;
                 border-radius: 3px;
                 font-family: monospace;
                 font-size: 0.9em;
-                color: #f5d0fe;
+                color: #202124;
             }
             pre {
-                background: #111827 !important;
-                color: #f8fafc;
-                border: 1px solid rgba(148, 163, 184, 0.14);
+                background: #f8f9fb !important;
+                color: #1f2937;
+                border: 1px solid #e8eaed;
             }
         </style>
     </head>
     <body>
         <div class="container">
             <div class="header">
-                <h1>⚖️ OpenEnv Compliance Audit</h1>
+                <h1>OpenEnv Compliance Audit</h1>
                 <p>Interactive Environment for Evaluating AI Agents on Compliance Audit Tasks</p>
             </div>
             
@@ -369,7 +384,7 @@ def dashboard_html() -> HTMLResponse:
                 </div>
                 
                 <div class="section">
-                    <h2>📋 Available Tasks</h2>
+                    <h2>Available Tasks</h2>
                     <table id="tasksTable">
                         <tr>
                             <th>Task ID</th>
@@ -424,7 +439,7 @@ def dashboard_html() -> HTMLResponse:
                 </div>
                 
                 <div class="section">
-                    <h2>🔗 API Endpoints</h2>
+                    <h2>API Endpoints</h2>
                     <p>Access the environment programmatically via these REST endpoints:</p>
                     <div style="margin-top: 15px;">
                         <a href="/health" class="api-link">GET /health</a>
@@ -438,7 +453,7 @@ def dashboard_html() -> HTMLResponse:
                 </div>
                 
                 <div class="section">
-                    <h2>📊 Baseline Scores</h2>
+                    <h2>Baseline Scores</h2>
                     <p>Performance of rule-based baseline agent (Qwen 2.5 72B with temperature=0):</p>
                     <table style="margin-top: 15px;">
                         <tr>
@@ -477,7 +492,7 @@ def dashboard_html() -> HTMLResponse:
                 </div>
                 
                 <div class="section">
-                    <h2>🚀 Quick Start</h2>
+                    <h2>Quick Start</h2>
                     <p>Start an episode and take actions:</p>
                     <pre style="background: #f5f5f5; padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em;">
 # Reset environment
@@ -497,7 +512,7 @@ curl -X POST http://localhost:7860/step \\
             </div>
             
             <div class="footer">
-                <p>⚖️ OpenEnv Compliance Audit | <a href="https://github.com/Kowshikv07/Auditrix" style="color: #667eea;">GitHub</a> | OpenEnv Framework</p>
+                <p>OpenEnv Compliance Audit | <a href="https://github.com/Kowshikv07/Auditrix" style="color: #1a73e8;">GitHub</a> | OpenEnv Framework</p>
             </div>
         </div>
     </body>
