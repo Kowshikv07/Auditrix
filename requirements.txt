@@ -4,3 +4,7 @@ pydantic==2.11.7
 openai==2.30.0
 openenv-core==0.2.3
 PyYAML==6.0.2
+streamlit==1.40.1
+plotly==5.24.1
+pandas==2.2.3
+requests==2.31.0
