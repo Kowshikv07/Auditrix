@@ -3,8 +3,8 @@ title: OpenEnv Compliance Audit
 emoji: "⚖️"
 colorFrom: blue
 colorTo: indigo
-sdk: docker
-app_port: 7860
+sdk: streamlit
+app_file: dashboard.py
 pinned: false
 tags:
   - openenv
