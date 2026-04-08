@@ -258,6 +258,10 @@ def _append_run_log(entry: Dict[str, Any]) -> None:
         handle.write(json.dumps(entry, ensure_ascii=True) + "\n")
 
 
+def _action_signature(action: AuditAction) -> tuple[str, Optional[str], Optional[str]]:
+    return (action.action_type.value, action.record_id, action.rule_id)
+
+
 def run_task(client: OpenAI, task_id: str, model_name: str) -> float:
     """Run one full episode and return the final task score."""
     env = ComplianceAuditEnv(task_id=task_id)
@@ -268,6 +272,8 @@ def run_task(client: OpenAI, task_id: str, model_name: str) -> float:
     score = 0.0
     rewards: List[float] = []
     success = False
+    prev_sig: Optional[tuple[str, Optional[str], Optional[str]]] = None
+    repeat_count = 0
 
     print(f"[START] task={task_id} env={BENCHMARK} model={model_name}")
 
@@ -280,6 +286,21 @@ def run_task(client: OpenAI, task_id: str, model_name: str) -> float:
                 action = AuditAction.model_validate(payload)
             except Exception:
                 action = AuditAction.model_validate(FALLBACK_FINISH)
+
+            # Break out of loops when the model repeats the exact same action.
+            sig = _action_signature(action)
+            if sig == prev_sig:
+                repeat_count += 1
+            else:
+                repeat_count = 0
+
+            if repeat_count >= 2:
+                fallback_payload = _fallback_action(obs)
+                action = AuditAction.model_validate(fallback_payload)
+                sig = _action_signature(action)
+                repeat_count = 0
+
+            prev_sig = sig
 
             result = env.step(action)
             obs = result.observation.model_dump()
