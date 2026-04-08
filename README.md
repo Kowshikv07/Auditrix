@@ -1,3 +1,13 @@
+---
+title: OpenEnv Compliance Audit
+emoji: "⚖️"
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_file: app.py
+pinned: false
+---
+
 # OpenEnv — Interactive Compliance Audit Environment
 
 > **A real-world AI agent environment for performing iterative compliance audits on structured organisational records.**
