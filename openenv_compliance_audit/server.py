@@ -232,7 +232,7 @@ def dashboard_html() -> HTMLResponse:
             body {
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                 background: radial-gradient(circle at top, #1f2937 0%, #0b1020 45%, #050816 100%);
-                color: #e5e7eb;
+                color: #f8fafc;
                 min-height: 100vh;
                 padding: 40px 20px;
             }
@@ -276,7 +276,7 @@ def dashboard_html() -> HTMLResponse:
                 margin-bottom: 40px;
             }
             .section h2 {
-                color: #f8fafc;
+                color: #ffffff;
                 margin-bottom: 20px;
                 border-bottom: 2px solid #8b5cf6;
                 padding-bottom: 10px;
@@ -295,7 +295,7 @@ def dashboard_html() -> HTMLResponse:
             th {
                 background: #111827;
                 font-weight: 600;
-                color: #f8fafc;
+                color: #ffffff;
             }
             tr:hover { background: rgba(148, 163, 184, 0.08); }
             .api-link {
@@ -316,7 +316,7 @@ def dashboard_html() -> HTMLResponse:
                 background: #111827;
                 padding: 20px;
                 text-align: center;
-                color: #94a3b8;
+                color: #cbd5e1;
                 border-top: 1px solid rgba(148, 163, 184, 0.16);
             }
             code {
@@ -325,11 +325,11 @@ def dashboard_html() -> HTMLResponse:
                 border-radius: 3px;
                 font-family: monospace;
                 font-size: 0.9em;
-                color: #c4b5fd;
+                color: #f5d0fe;
             }
             pre {
                 background: #111827 !important;
-                color: #e5e7eb;
+                color: #f8fafc;
                 border: 1px solid rgba(148, 163, 184, 0.14);
             }
         </style>
