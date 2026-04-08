@@ -1,6 +1,9 @@
 """FastAPI server exposing the OpenEnv compliance audit environment."""
 from __future__ import annotations
 
+import json
+from html import escape
+from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import FastAPI, HTTPException, Request
@@ -218,6 +221,48 @@ def state() -> dict:
 @app.get("/dashboard")
 def dashboard_html() -> HTMLResponse:
     """Return HTML dashboard for visualizing model performance."""
+    logs_file = Path(__file__).resolve().parent.parent / "model-benchmark-logs" / "inference_runs.jsonl"
+    model_rows = ""
+
+    if logs_file.exists():
+        with open(logs_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                rewards = item.get("rewards", [])
+                if isinstance(rewards, list):
+                    rewards_preview = ", ".join(str(value) for value in rewards[:2])
+                    if len(rewards) > 2:
+                        rewards_preview += ", ..."
+                    rewards_full = ", ".join(str(value) for value in rewards)
+                else:
+                    rewards_preview = str(rewards)
+                    rewards_full = str(rewards)
+
+                model_rows += (
+                    "<tr class=\"mc-row\">"
+                    f"<td>{escape(str(item.get('timestamp', '')))}</td>"
+                    f"<td>{escape(str(item.get('benchmark', '')))}</td>"
+                    f"<td>{escape(str(item.get('task_id', '')))}</td>"
+                    f"<td>{escape(str(item.get('model', '')))}</td>"
+                    f"<td>{escape(str(item.get('score', '')))}</td>"
+                    f"<td>{escape(str(item.get('steps', '')))}</td>"
+                    f"<td>{escape(str(item.get('success', '')))}</td>"
+                    "<td class=\"rewards-cell\">"
+                    f"<span class=\"rewards-preview\">{escape(rewards_preview)}</span>"
+                    f"<span class=\"rewards-full\">{escape(rewards_full)}</span>"
+                    "</td>"
+                    "</tr>"
+                )
+
+    if not model_rows:
+        model_rows = "<tr><td colspan=\"8\">No benchmark records found.</td></tr>"
     
     html_content = """
     <!DOCTYPE html>
@@ -279,7 +324,7 @@ def dashboard_html() -> HTMLResponse:
                 transition: background-color 0.3s, color 0.3s;
             }
             .container {
-                max-width: 1120px;
+                max-width: 1320px;
                 margin: 0 auto;
                 background: var(--bg-secondary);
                 border-radius: 14px;
@@ -434,6 +479,35 @@ def dashboard_html() -> HTMLResponse:
             a[style*="color"] {
                 color: var(--link-color) !important;
             }
+            .model-comparison-table tbody tr.mc-row {
+                cursor: pointer;
+                height: 44px;
+            }
+            .model-comparison-table tbody tr.mc-row td {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                max-width: 220px;
+            }
+            .model-comparison-table .rewards-cell {
+                max-width: 420px;
+            }
+            .model-comparison-table .rewards-full {
+                display: none;
+            }
+            .model-comparison-table tbody tr.mc-row.expanded {
+                height: auto;
+            }
+            .model-comparison-table tbody tr.mc-row.expanded td {
+                white-space: normal;
+            }
+            .model-comparison-table tbody tr.mc-row.expanded .rewards-preview {
+                display: none;
+            }
+            .model-comparison-table tbody tr.mc-row.expanded .rewards-full {
+                display: inline;
+                word-break: break-word;
+            }
         </style>
     </head>
     <body>
@@ -573,6 +647,24 @@ def dashboard_html() -> HTMLResponse:
                         </tr>
                     </table>
                 </div>
+
+                <div class="section">
+                    <h2>Model Comparison</h2>
+                    <p>All benchmark entries from inference_runs.jsonl:</p>
+                    <table id="modelComparisonTable" class="model-comparison-table" style="margin-top: 15px;">
+                        <tr>
+                            <th>Timestamp</th>
+                            <th>Benchmark</th>
+                            <th>Task ID</th>
+                            <th>Model</th>
+                            <th>Score</th>
+                            <th>Steps</th>
+                            <th>Success</th>
+                            <th>Rewards</th>
+                        </tr>
+                        __MODEL_COMPARISON_ROWS__
+                    </table>
+                </div>
                 
                 <div class="section">
                     <h2>Quick Start</h2>
@@ -614,10 +706,33 @@ curl -X POST http://localhost:7860/step \\
                 const isDarkMode = body.classList.contains('dark-mode');
                 localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
             });
+
+            const modelRows = document.querySelectorAll('#modelComparisonTable .mc-row');
+            const collapseAllRows = () => {
+                modelRows.forEach((row) => row.classList.remove('expanded'));
+            };
+
+            modelRows.forEach((row) => {
+                row.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    const wasExpanded = row.classList.contains('expanded');
+                    collapseAllRows();
+                    if (!wasExpanded) {
+                        row.classList.add('expanded');
+                    }
+                });
+            });
+
+            document.addEventListener('click', (event) => {
+                if (!event.target.closest('#modelComparisonTable')) {
+                    collapseAllRows();
+                }
+            });
         </script>
     </body>
     </html>
     """
+    html_content = html_content.replace("__MODEL_COMPARISON_ROWS__", model_rows)
     return HTMLResponse(content=html_content)
 
 
