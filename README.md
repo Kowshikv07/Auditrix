@@ -368,11 +368,11 @@ streamlit run dashboard.py
 
 | Feature | Description |
 |---------|-------------|
-| **🏆 Leaderboard** | Rank models by average score across tasks |
-| **📈 Performance Charts** | Beautiful visualizations: score distribution, trends, task difficulty |
-| **📊 Detailed Results** | Filter & sort individual inference runs |
-| **🔧 Interactive Filters** | Select models, tasks, data sources |
-| **📥 Export** | Download leaderboard as CSV |
+| **Leaderboard** | Rank models by average score across tasks |
+| **Performance Charts** | Beautiful visualizations: score distribution, trends, task difficulty |
+| **Detailed Results** | Filter & sort individual inference runs |
+| **Interactive Filters** | Select models, tasks, data sources |
+| **Export** | Download leaderboard as CSV |
 
 **Judge-Friendly!** Perfect for hackathon pitches: show live results, beautiful charts, and professional UI. 🎯
 
@@ -437,7 +437,7 @@ openenv/
 | Docker build | PASS |
 | Local container runtime checks | PASS |
 | Inference format (`[START]/[STEP]/[END]`) | PASS |
-| Hugging Face Space live checks | READY |
+| Hugging Face Space live checks | PASS |
 
 ### 1) OpenEnv validate
 
@@ -496,12 +496,21 @@ docker stop auditrix-check-run
 ### 6) Hugging Face Space live checks
 
 ```text
-Run these checks against your deployed Space URL (replace <your-space-subdomain>):
+Verified live Space runtime URL:
+https://kowshik147-auditrix.hf.space
+
+Endpoint checks:
+- GET /health -> HTTP 200
+- GET /tasks -> HTTP 200
+- POST /reset -> HTTP 200 with valid observation JSON
 ```
 
 ```bash
-export SPACE_URL="https://<your-space-subdomain>.hf.space"
+export SPACE_URL="https://kowshik147-auditrix.hf.space"
 curl -sS -i "$SPACE_URL/health"
 curl -sS -i "$SPACE_URL/tasks"
 curl -sS -i -X POST "$SPACE_URL/reset" -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'
+
+# Validator command used for submission gate checks
+bash scripts/validate-submission.sh "$SPACE_URL" .
 ```
