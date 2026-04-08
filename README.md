@@ -309,16 +309,32 @@ curl -X POST http://localhost:7860/step \
   -H "Content-Type: application/json" \
   -d '{"action_type": "inspect_record", "record_id": "F001"}'
 
-# Run tests (43 tests)
+# Run tests
 python -m pytest -q
 ```
 
 ### Docker
 
 ```bash
+# IMPORTANT: run from repository root (the folder that contains Dockerfile)
+cd /path/to/Auditrix
+
+# Build image
 docker build -t openenv-compliance-audit .
-docker run -p 7860:7860 openenv-compliance-audit
+
+# Run container
+docker run --rm -p 7860:7860 --name openenv-audit openenv-compliance-audit
+
+# In another terminal, verify endpoints
+curl -sS http://localhost:7860/tasks
+curl -sS http://localhost:7860/health
+
+# Optional: stop container (if not using --rm)
+docker stop openenv-audit
 ```
+
+If you get `failed to read dockerfile: open Dockerfile: no such file or directory`,
+you are running `docker build` from the wrong directory. `cd` into this repo root first.
 
 ### Inference script
 
@@ -414,6 +430,15 @@ openenv/
 
 ## Submission Validation Evidence
 
+| Check | Result |
+|---|---|
+| OpenEnv validate | PASS |
+| Unit tests | PASS |
+| Docker build | PASS |
+| Local container runtime checks | PASS |
+| Inference format (`[START]/[STEP]/[END]`) | PASS |
+| Hugging Face Space live checks | READY |
+
 ### 1) OpenEnv validate
 
 ```text
@@ -423,17 +448,60 @@ openenv/
 ### 2) Unit tests
 
 ```text
-43 passed
+46 passed in 1.31s
 ```
 
 ### 3) Docker build
 
-```text
+```bash
 docker build -t openenv-compliance-audit-proof .
-# Status: PASS
+```
+
+```text
+Status: PASS
 ```
 
 ### 4) Inference baseline (real token run)
 
+```text
+[START] task=easy_basic_audit env=openenv_compliance_audit model=Qwen/Qwen2.5-72B-Instruct
+[END] success=true steps=25 score=0.62
+```
 
-### 5) Hugging Face Space live checks
+```bash
+HF_TOKEN="hf_..." MODEL_NAME="Qwen/Qwen2.5-72B-Instruct" python inference.py --tasks easy_basic_audit
+```
+
+
+### 5) Local container runtime checks
+
+```text
+Local Docker run endpoint checks:
+- GET /health -> HTTP 200
+- GET /tasks -> HTTP 200
+- POST /reset -> HTTP 200 with valid observation JSON
+- POST /step  -> HTTP 200 with updated state JSON
+```
+
+```bash
+docker build -t auditrix-check .
+docker run -d -p 7861:7860 --name auditrix-check-run auditrix-check
+curl -sS -i http://localhost:7861/health
+curl -sS -i http://localhost:7861/tasks
+curl -sS -i -X POST http://localhost:7861/reset -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'
+curl -sS -i -X POST http://localhost:7861/step -H "Content-Type: application/json" -d '{"action_type":"inspect_record","record_id":"E001"}'
+docker stop auditrix-check-run
+```
+
+### 6) Hugging Face Space live checks
+
+```text
+Run these checks against your deployed Space URL (replace <your-space-subdomain>):
+```
+
+```bash
+export SPACE_URL="https://<your-space-subdomain>.hf.space"
+curl -sS -i "$SPACE_URL/health"
+curl -sS -i "$SPACE_URL/tasks"
+curl -sS -i -X POST "$SPACE_URL/reset" -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'
+```
