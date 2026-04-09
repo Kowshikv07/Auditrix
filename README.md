@@ -350,7 +350,7 @@ python inference.py
 python inference.py --tasks easy_basic_audit finance_sox_audit
 ```
 
-### 📊 Interactive Model Leaderboard Dashboard
+### Interactive Model Leaderboard Dashboard
 
 Visualize model performance rankings with an interactive Streamlit dashboard.
 
