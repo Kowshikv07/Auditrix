@@ -21,7 +21,7 @@ tags:
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-43%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-46%20passed-brightgreen)]()
 
 ---
 
