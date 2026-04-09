@@ -374,8 +374,6 @@ streamlit run dashboard.py
 | **Interactive Filters** | Select models, tasks, data sources |
 | **Export** | Download leaderboard as CSV |
 
-**Judge-Friendly!** Perfect for hackathon pitches: show live results, beautiful charts, and professional UI. 🎯
-
 ---
 
 ## Baseline Scores
