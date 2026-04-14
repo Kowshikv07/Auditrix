@@ -21,7 +21,7 @@ tags:
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-46%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)]()
 
 ---
 
@@ -41,6 +41,17 @@ This domain is directly applicable to training and evaluating agents for:
 - HR compliance tooling
 - Auditable AI decision-making
 - Finance and payroll control auditing
+
+### Dynamic Audit Environment
+
+| Feature | Description |
+|---|---|
+| **Dynamic Events** | `POLICY_UPDATE`, `SYSTEM_OUTAGE`, `RECORD_AMENDMENT` injected per `(task_id, seed)` |
+| **Structured Explainability** | `evaluate_with_evidence()` returns `reason_codes` + field-level evidence per rule |
+| **Audit Confidence Report** | `generate_report` accepts an `audit_confidence` section with evidence coverage ratio |
+| **Anti-Exploit Grading** | Loop detection (sliding window), report consistency check, coverage floor |
+| **Extreme Task** | `regulatory_storm_audit` — 25 records, all 10 rules, 6 simultaneous dynamic events |
+| **Variance Reporting** | `--seeds N` runs each task N times; reports mean±std + failure mode taxonomy |
 
 ---
 
@@ -512,3 +523,20 @@ curl -sS -i -X POST "$SPACE_URL/reset" -H "Content-Type: application/json" -d '{
 # Validator command used for submission gate checks
 bash scripts/validate-submission.sh "$SPACE_URL" .
 ```
+
+---
+
+## Why This Fills a Real Gap in AI Agent Evaluation
+
+Compliance auditing is a **$500B+/year industry** (Deloitte Global Compliance Survey, 2023), yet no existing RL or agent evaluation benchmark covers it with the regulatory specificity Auditrix provides.
+
+Auditrix uniquely combines:
+
+1. **Rule-based logic with exemptions** — inactive employees are exempt from R5/R8; records without PII access are exempt from R9. Agents must understand *when not to apply* a rule.
+2. **Cross-record reasoning** — R4 (duplicate ID) requires comparing across all records simultaneously, not just per-record pattern matching.
+3. **Overlapping constraints** — a single record can violate R5 (expired contract) AND R9 (no consent). Agents must enumerate all applicable violations.
+4. **Dynamic state** — `POLICY_UPDATE` events change thresholds mid-episode; `RECORD_AMENDMENT` corrects violations; `SYSTEM_OUTAGE` blocks records temporarily. Static memorisation of the task fails.
+5. **Precision penalties** — false positives cost -0.30 per flag, forcing *evidence-based flagging* over heuristic pattern matching.
+6. **Calibrated confidence** — the `audit_confidence` section rewards agents that correctly identify their uncertain flags, training well-calibrated reasoning in agentic systems.
+
+---

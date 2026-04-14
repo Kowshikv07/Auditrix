@@ -16,7 +16,7 @@ Five tasks across three difficulty levels:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class RecordTruth:
 class TaskDefinition:
     task_id: str
     title: str
-    difficulty: Literal["easy", "medium", "hard"]
+    difficulty: Literal["easy", "medium", "hard", "extreme"]
     objective: str
     max_steps: int
     active_rule_ids: List[str]
@@ -719,6 +719,376 @@ _DATA_INTEGRITY_RECORDS: List[RecordTruth] = [
 # ---------------------------------------------------------------------------
 # Task registry
 # ---------------------------------------------------------------------------
+
+
+# ============================================================================
+# NEW TASK 4: Regulatory Storm — Extreme Stress-Test (max_steps=120, all rules)
+# ============================================================================
+#
+# Scenario
+# --------
+# The board has called an emergency multi-domain compliance review following
+# a regulator's surprise audit letter.  The compliance team must audit 25
+# records spanning HR, Finance, Data, and Legal functions — simultaneously
+# applying all 10 rules.
+#
+# Challenges (simultaneous constraint conflicts):
+#   1. THREE duplicate-ID groups (ids 5, 12, 20 — each appears twice)
+#   2. Records with GDPR + overtime violations; resolving one reveals the other
+#   3. Missing fields at varying severity (R10)
+#   4. Expired contracts on active employees (R5)
+#   5. Salary boundary edge cases (R3)
+#   6. Minor employees (R1) — edge cases at age 18 and hours 8
+#   7. Dynamic events: POLICY_UPDATE lowers overtime threshold mid-audit;
+#      two RECORD_AMENDMENTs resolve violations for specific records;
+#      two SYSTEM_OUTAGEs block records temporarily
+#
+# Pre-event violation summary (35 (record, rule) pairs):
+#   RS001: R1          RS002: R2+R3       RS003: R8
+#   RS004: R5+R9       RS005: R3+R7       RS006: R4
+#   RS007: R6+R8       RS008: R4          RS009: R10
+#   RS010: R3+R9       RS011: R7          RS012: R5
+#   RS013: R6          RS014: R3          RS015: R8+R9
+#   RS016: R4          RS017: R10         RS018: R3+R6
+#   RS019: R6          RS020: R2+R8       RS021: —
+#   RS022: R4          RS023: R1          RS024: R3+R7+R8
+#   RS025: —
+#
+# After dynamic events fire (varies by seed):
+#   RS003:R8 resolved (RECORD_AMENDMENT sets compliance_training=True)
+#   RS019:R6 resolved (RECORD_AMENDMENT sets background_check=True)
+#   R7 threshold → 40h (POLICY_UPDATE): RS005 and RS024 R7 still hold (hours>40)
+#   RS007 and RS015 go into SYSTEM_OUTAGE (agent must wait)
+# ============================================================================
+_REGULATORY_STORM_RECORDS: List[RecordTruth] = [
+    # RS001: Minor employee (age 16) working 10 hours — R1
+    RecordTruth(
+        record_id="RS001",
+        fields={
+            "id": 1, "name": "Ada Lewis", "age": 16, "role": "employee",
+            "hours": 10, "salary": 35000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": False, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R1"],
+    ),
+    # RS002: Intern (age 20) 44 hours (R2) + salary 38000 > intern max 35000 (R3)
+    RecordTruth(
+        record_id="RS002",
+        fields={
+            "id": 2, "name": "Ben Nakamura", "age": 20, "role": "intern",
+            "hours": 44, "salary": 38000, "status": "active",
+            "contract_end": "2025-09-01", "background_check": False,
+            "overtime_approved": False, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R2", "R3"],
+    ),
+    # RS003: Missing compliance training (R8) — RECORD_AMENDMENT fires later to set True
+    RecordTruth(
+        record_id="RS003",
+        fields={
+            "id": 3, "name": "Clara Reich", "age": 33, "role": "analyst",
+            "hours": 40, "salary": 60000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": False,
+            "overtime_approved": True, "compliance_training": False,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R8"],  # resolved by RECORD_AMENDMENT event
+    ),
+    # RS004: Active contractor, contract expired (R5) + PII access without consent (R9)
+    RecordTruth(
+        record_id="RS004",
+        fields={
+            "id": 4, "name": "David Okonkwo", "age": 28, "role": "contractor",
+            "hours": 40, "salary": 75000, "status": "active",
+            "contract_end": "2023-03-01",  # expired
+            "background_check": False, "overtime_approved": True,
+            "compliance_training": True, "pii_access": True, "gdpr_consent": False,
+        },
+        expected_violations=["R5", "R9"],
+    ),
+    # RS005: Employee 52h, no OT approval (R7) + salary 82000 > employee max 80000 (R3)
+    # After POLICY_UPDATE (threshold→40), R7 still applies since 52 > 40
+    RecordTruth(
+        record_id="RS005",
+        fields={
+            "id": 5, "name": "Elise Ramos", "age": 31, "role": "employee",
+            "hours": 52, "salary": 82000, "status": "active",
+            "contract_end": "2025-12-01", "background_check": True,
+            "overtime_approved": False, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        # R4: shares id=5 with RS006; R3: salary>80000; R7: hours=52>48
+        expected_violations=["R3", "R4", "R7"],
+    ),
+    # RS006: Duplicate ID 5 with RS005 → R4
+    RecordTruth(
+        record_id="RS006",
+        fields={
+            "id": 5, "name": "Frank Torres", "age": 29, "role": "employee",
+            "hours": 38, "salary": 55000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R4"],
+    ),
+    # RS007: Manager, no background check (R6) + no compliance training (R8)
+    # → SYSTEM_OUTAGE fires for 8 steps; grader accounts for outage window
+    RecordTruth(
+        record_id="RS007",
+        fields={
+            "id": 7, "name": "Grace Patel", "age": 38, "role": "manager",
+            "hours": 40, "salary": 90000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": False,
+            "overtime_approved": True, "compliance_training": False,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R6", "R8"],
+    ),
+    # RS008: Duplicate ID 5 third occurrence? No — ID 12 is the second duplicate group
+    # RS008: id=12, duplicate with RS016 → R4
+    RecordTruth(
+        record_id="RS008",
+        fields={
+            "id": 12, "name": "Henry Bassett", "age": 44, "role": "director",
+            "hours": 42, "salary": 150000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": True, "gdpr_consent": True,
+        },
+        expected_violations=["R4"],
+    ),
+    # RS009: Missing salary field entirely → R10 (R3 skips gracefully)
+    RecordTruth(
+        record_id="RS009",
+        fields={
+            "id": 9, "name": "Isabel Ferreira", "age": 25, "role": "employee",
+            "hours": 40, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },  # salary deliberately omitted
+        expected_violations=["R10"],
+    ),
+    # RS010: Data engineer with PII access + no consent (R9) +
+    #         salary 115000 > data_engineer max 110000 (R3)
+    RecordTruth(
+        record_id="RS010",
+        fields={
+            "id": 10, "name": "Jorge Almeida", "age": 30, "role": "data_engineer",
+            "hours": 40, "salary": 115000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": True, "gdpr_consent": False,
+        },
+        expected_violations=["R3", "R9"],
+    ),
+    # RS011: 54 hours, no OT approval (R7); note: after POLICY_UPDATE this still fires
+    RecordTruth(
+        record_id="RS011",
+        fields={
+            "id": 11, "name": "Karen Wu", "age": 27, "role": "employee",
+            "hours": 54, "salary": 60000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": False, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R7"],
+    ),
+    # RS012: Active with expired contract → R5
+    RecordTruth(
+        record_id="RS012",
+        fields={
+            "id": 12, "name": "Liam Osei", "age": 35, "role": "contractor",
+            "hours": 38, "salary": 70000, "status": "active",
+            "contract_end": "2023-11-01",  # expired
+            "background_check": True, "overtime_approved": True,
+            "compliance_training": True, "pii_access": False, "gdpr_consent": False,
+        },
+        # R4: shares id=12 with RS008 and RS016; R5: expired contract
+        expected_violations=["R4", "R5"],
+    ),
+    # RS013: Director, no background check (R6)
+    RecordTruth(
+        record_id="RS013",
+        fields={
+            "id": 13, "name": "Maya Singh", "age": 47, "role": "director",
+            "hours": 45, "salary": 160000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": False,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R6"],
+    ),
+    # RS014: Finance manager salary 140000 > max 130000 (R3)
+    RecordTruth(
+        record_id="RS014",
+        fields={
+            "id": 14, "name": "Nadia Kovac", "age": 42, "role": "finance_manager",
+            "hours": 40, "salary": 140000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R3"],
+    ),
+    # RS015: ML engineer, PII access + no consent (R9) + no training (R8)
+    # → SYSTEM_OUTAGE fires for 6 steps
+    RecordTruth(
+        record_id="RS015",
+        fields={
+            "id": 15, "name": "Omar Diaz", "age": 31, "role": "ml_engineer",
+            "hours": 40, "salary": 100000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": False,
+            "pii_access": True, "gdpr_consent": False,
+        },
+        expected_violations=["R8", "R9"],
+    ),
+    # RS016: id=12 duplicate group — R4 (with RS008 and RS012)
+    RecordTruth(
+        record_id="RS016",
+        fields={
+            "id": 12, "name": "Petra Novak", "age": 29, "role": "analyst",
+            "hours": 38, "salary": 68000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R4"],
+    ),
+    # RS017: Missing role field → R10; salary present but R3 skips gracefully
+    RecordTruth(
+        record_id="RS017",
+        fields={
+            "id": 17, "name": "Quinn Huang",
+            "hours": 38, "salary": 55000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },  # role deliberately omitted
+        expected_violations=["R10"],
+    ),
+    # RS018: Accountant, no background check (R6) + salary 38000 < accountant min 40000 (R3)
+    RecordTruth(
+        record_id="RS018",
+        fields={
+            "id": 18, "name": "Rachel Musa", "age": 26, "role": "accountant",
+            "hours": 40, "salary": 38000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": False,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R3", "R6"],
+    ),
+    # RS019: Manager, no background check (R6) — RECORD_AMENDMENT fires to set True
+    RecordTruth(
+        record_id="RS019",
+        fields={
+            "id": 19, "name": "Samuel Ito", "age": 34, "role": "manager",
+            "hours": 40, "salary": 95000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": None,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R6"],  # resolved by RECORD_AMENDMENT event
+    ),
+    # RS020: Intern (age 22) 43 hours (R2) + no compliance training (R8)
+    RecordTruth(
+        record_id="RS020",
+        fields={
+            "id": 20, "name": "Tara Obi", "age": 22, "role": "intern",
+            "hours": 43, "salary": 25000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": False,
+            "overtime_approved": False, "compliance_training": False,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        # R2: intern >40h; R4: shares id=20 with RS022; R8: no compliance training
+        expected_violations=["R2", "R4", "R8"],
+    ),
+    # RS021: Fully compliant employee (edge case: age exactly 18, hours exactly 40)
+    RecordTruth(
+        record_id="RS021",
+        fields={
+            "id": 21, "name": "Uma Larsson", "age": 18, "role": "employee",
+            "hours": 40, "salary": 35000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=[],  # age=18 not <18; hours=40 not >40
+    ),
+    # RS022: id=20 duplicate group — R4 (with a hypothetical RS025? No — use id 20 with RS020)
+    # RS022 shares id=20 with RS020 → R4
+    RecordTruth(
+        record_id="RS022",
+        fields={
+            "id": 20, "name": "Victor Chen", "age": 36, "role": "employee",
+            "hours": 38, "salary": 58000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R4"],
+    ),
+    # RS023: Minor (age 17) working 9 hours → R1
+    RecordTruth(
+        record_id="RS023",
+        fields={
+            "id": 23, "name": "Wendy Park", "age": 17, "role": "employee",
+            "hours": 9, "salary": 32000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": False, "compliance_training": True,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        expected_violations=["R1"],
+    ),
+    # RS024: Senior analyst with 46h no OT approval (R7, becomes violation after threshold→40) +
+    #         salary 95000 > senior_analyst max 90000 (R3) + no compliance_training (R8)
+    # NOTE: Before POLICY_UPDATE, R7 does NOT apply (46 ≤ 48). After POLICY_UPDATE (→40), R7 applies.
+    # The expected_violations uses the pre-event state (static ground truth).
+    # The environment re-evaluates R7 against live policy_overrides but graders
+    # use the event_schedule to determine the correct set at episode end.
+    RecordTruth(
+        record_id="RS024",
+        fields={
+            "id": 24, "name": "Xavier Holm", "age": 29, "role": "senior_analyst",
+            "hours": 46, "salary": 95000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": False, "compliance_training": False,
+            "pii_access": False, "gdpr_consent": False,
+        },
+        # R3: salary 95000 > senior_analyst max 90000
+        # R8: no compliance training
+        # R7: hours=46 <= 48 default threshold, so R7 does NOT fire pre-event.
+        #     After POLICY_UPDATE (threshold→40), R7 fires. The ExtremeAuditGrader
+        #     handles this dynamically via policy_overrides; pre-event ground truth here
+        #     only reflects static rule evaluation (no policy override).
+        expected_violations=["R3", "R8"],
+    ),
+    # RS025: Fully compliant manager (all fields present, within band, all checks done)
+    RecordTruth(
+        record_id="RS025",
+        fields={
+            "id": 25, "name": "Yuki Brennan", "age": 40, "role": "manager",
+            "hours": 38, "salary": 100000, "status": "active",
+            "contract_end": "2025-06-01", "background_check": True,
+            "overtime_approved": True, "compliance_training": True,
+            "pii_access": True, "gdpr_consent": True,
+        },
+        expected_violations=[],
+    ),
+]
+# Also flag duplicate IDs for RS020/RS022 (id=20) and RS008/RS012/RS016 (id=12)
+# and RS005/RS006 (id=5) — the R4 expected_violations above already include these.
+
+
+# ---------------------------------------------------------------------------
+# Task registry
+# ---------------------------------------------------------------------------
 TASKS: Dict[str, TaskDefinition] = {
     "easy_basic_audit": TaskDefinition(
         task_id="easy_basic_audit",
@@ -738,7 +1108,7 @@ TASKS: Dict[str, TaskDefinition] = {
         title="Mixed HR & Payroll Compliance Audit",
         difficulty="medium",
         objective=(
-            "Audit 12 employee records against 4 rules (R1–R4). Some violations are non-obvious: "
+            "Audit 12 employee records against 4 rules (R1-R4). Some violations are non-obvious: "
             "check salary ranges per role (R3) and duplicate employee IDs (R4). Generate a "
             "complete audit report with no missed violations and no false positives."
         ),
@@ -811,6 +1181,27 @@ TASKS: Dict[str, TaskDefinition] = {
         max_steps=40,
         active_rule_ids=["R3", "R4", "R10"],
         records=_DATA_INTEGRITY_RECORDS,
+    ),
+    "regulatory_storm_audit": TaskDefinition(
+        task_id="regulatory_storm_audit",
+        title="Regulatory Storm: Multi-Domain Stress-Test Audit",
+        difficulty="extreme",
+        objective=(
+            "Extreme stress-test audit across 25 records covering all 10 compliance rules "
+            "simultaneously. Three simultaneous constraint conflicts: (1) duplicate-ID groups "
+            "across three different ID values, (2) records with overlapping GDPR + overtime "
+            "violations where resolving the evidence for one reveals the other, and (3) missing "
+            "fields at varying severity levels triggering R10. Mid-episode dynamic events fire: "
+            "a POLICY_UPDATE lowers the overtime threshold from 48 to 40 h (requiring re-evaluation "
+            "of all records with 41-47 hours), SYSTEM_OUTAGE blocks two records for multiple steps, "
+            "and two RECORD_AMENDMENTs correct violations that were valid before the amendment. "
+            "An agent that memorises static task data will fail — correct answers depend on the "
+            "seed-dependent event schedule. Score ≥ 0.50 requires zero false positives and "
+            "≥ 50% detection. Score 1.0 requires full detection + zero false positives + efficient coverage."
+        ),
+        max_steps=120,
+        active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"],
+        records=_REGULATORY_STORM_RECORDS,
     ),
 }
 

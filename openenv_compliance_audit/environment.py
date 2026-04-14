@@ -2,7 +2,7 @@
 
 OpenEnv API
 -----------
-reset(task_id=None) → AuditObservation
+reset(task_id=None, seed=None) → AuditObservation
 step(action: AuditAction) → StepResult
 state() → AuditState
 
@@ -11,21 +11,36 @@ Episode flow
 1. Agent calls inspect_record(record_id)          → reveals record fields
 2. Agent calls apply_rule(record_id, rule_id)     → runs rule engine; +0.2 if violation found
 3. Agent calls flag_violation(record_id, rule_id) → officially flags; +0.5 correct / -0.3 wrong
-4. Agent calls mark_compliant(record_id)          → declares no violations; +0.05 if right
-5. Agent calls generate_report() or finish()      → episode ends; terminal grader score applied
+4. Agent calls mark_compliant(record_id)           → declares no violations; +0.05 if right
+generate_report or finish       → episode ends; terminal grader score applied
+
+Additions (Glacio-inspired improvements)
+-------------------------------------------
+• Dynamic incident mechanics: EventScheduler injects POLICY_UPDATE / SYSTEM_OUTAGE /
+  RECORD_AMENDMENT events mid-episode per (task_id, seed).
+• Structured explainability: every apply_rule and flag_violation returns a DecisionTrace
+  with full reason_codes and rule_evidence using `evaluate_with_evidence()`.
+• Audit confidence report: generate_report accepts and scores an `audit_confidence` section.
+• Anti-exploit loop detection: sliding window of last 5 actions; >3 identical
+  (action_type, record_id) signals in 5 steps → -0.10 penalty.
+• Report consistency check: if the submitted report's flagged_violations contradicts
+  the actual flagged state, a proportional terminal penalty is applied.
+• event_schedule logged in info["event_schedule"] at reset() for deterministic grading.
 """
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from .events import EventScheduler
 from .graders import grader_for_difficulty
 from .models import (
     ActionType,
     AuditAction,
     AuditObservation,
     AuditReward,
-    DecisionTrace,
     AuditState,
+    DecisionTrace,
+    EventEntry,
     RecordInternalState,
     RecordView,
     StepResult,
@@ -33,6 +48,11 @@ from .models import (
 )
 from .rules import RULES, rule_info
 from .tasks import TASKS, list_task_ids
+
+# Anti-exploit window size
+_LOOP_WINDOW = 5
+_LOOP_THRESHOLD = 3   # same sig must appear > this many times in window to trigger penalty
+_LOOP_PENALTY = 0.10
 
 
 class ComplianceAuditEnv:
@@ -73,8 +93,14 @@ class ComplianceAuditEnv:
             records[rt.record_id] = RecordInternalState(
                 record_id=rt.record_id,
                 fields=dict(rt.fields),
+                original_fields=dict(rt.fields),  # snapshot before any amendments
                 expected_violations=list(rt.expected_violations),
             )
+
+        # Build deterministic event schedule
+        resolved_seed = seed if seed is not None else 42
+        scheduler = EventScheduler(task_id=self._active_task_id, seed=resolved_seed)
+        event_schedule = scheduler.build_schedule()
 
         self._state = AuditState(
             task_id=task.task_id,
@@ -84,9 +110,13 @@ class ComplianceAuditEnv:
             active_rule_ids=list(task.active_rule_ids),
             max_steps=task.max_steps,
             records=records,
+            event_schedule=event_schedule,
+            policy_overrides={},
+            recent_action_window=[],
+            loop_penalty_applied=0,
         )
         self._last_action_sig = None
-        self._episode_seed = seed
+        self._episode_seed = resolved_seed
         return self._build_observation()
 
     def step(self, action: AuditAction) -> StepResult:
@@ -95,14 +125,15 @@ class ComplianceAuditEnv:
             raise RuntimeError("Call reset() before step().")
         if self._state.done:
             grader = grader_for_difficulty(self._state.difficulty)
-            task_score = grader.grade(self._state).score
+            breakdown = grader.grade(self._state)
             return StepResult(
                 observation=self._build_observation(),
                 reward=0.0,
                 done=True,
                 info={
                     "message": "Episode already finished.",
-                    "task_score": task_score,
+                    "task_score": breakdown.score,
+                    "failure_mode": breakdown.failure_mode,
                     "difficulty": self._state.difficulty,
                 },
             )
@@ -110,24 +141,47 @@ class ComplianceAuditEnv:
         self._state.step_count += 1
         self._state.last_action_error = None
 
-        # Detect repeated identical action
-        sig = (
-            action.action_type.value,
-            action.record_id,
-            action.rule_id,
+        # ── Apply dynamic events for this step ────────────────────────────
+        EventScheduler.apply_events(
+            step=self._state.step_count,
+            event_schedule=self._state.event_schedule,
+            records=self._state.records,  # type: ignore[arg-type]
+            policy_overrides=self._state.policy_overrides,
         )
-        is_repeat = sig == self._last_action_sig
-        self._last_action_sig = sig
+
+        # ── Anti-exploit: track action signature in sliding window ────────
+        sig = f"{action.action_type.value}:{action.record_id or ''}"
+        window = self._state.recent_action_window
+        window.append(sig)
+        if len(window) > _LOOP_WINDOW:
+            window.pop(0)
 
         reward_components: Dict[str, float] = {}
         reward_value = 0.0
+        loop_penalty_applied = False
 
-        try:
-            step_reward, reward_components = self._dispatch(action, is_repeat)
-            reward_value += step_reward
-        except ValueError as exc:
-            self._state.last_action_error = str(exc)
-            reward_components["invalid_action"] = 0.0
+        # Detect looping before dispatch
+        if len(window) >= _LOOP_WINDOW:
+            same_count = window.count(sig)
+            if same_count > _LOOP_THRESHOLD:
+                self._state.penalties += _LOOP_PENALTY
+                reward_components["loop_penalty"] = -_LOOP_PENALTY
+                reward_value -= _LOOP_PENALTY
+                loop_penalty_applied = True
+                self._state.loop_penalty_applied += 1
+                # Clear window to avoid repeated penalisation of the same burst
+                self._state.recent_action_window.clear()
+
+        if not loop_penalty_applied:
+            try:
+                step_reward, reward_components = self._dispatch(action)
+                reward_value += step_reward
+            except ValueError as exc:
+                self._state.last_action_error = str(exc)
+                reward_components["invalid_action"] = 0.0
+        else:
+            # Skip dispatch when loop penalty fired
+            pass
 
         # Episode termination
         if self._state.step_count >= self._state.max_steps:
@@ -136,11 +190,13 @@ class ComplianceAuditEnv:
         terminal_bonus = 0.0
         report_quality_score = 0.0
         report_quality_components: Dict[str, float] = {}
+
         if action.action_type in (ActionType.GENERATE_REPORT, ActionType.FINISH):
             self._state.done = True
             grader = grader_for_difficulty(self._state.difficulty)
-            final_score = grader.grade(self._state).score
-            # Report gets a larger terminal bonus than a bare finish
+            breakdown = grader.grade(self._state)
+            final_score = breakdown.score
+
             multiplier = 0.30 if action.action_type == ActionType.GENERATE_REPORT else 0.15
             terminal_bonus = multiplier * final_score
             reward_components["terminal_bonus"] = round(terminal_bonus, 4)
@@ -152,19 +208,35 @@ class ComplianceAuditEnv:
                 reward_components["report_quality_bonus"] = round(report_quality_bonus, 4)
                 reward_value += report_quality_bonus
 
+                # Consistency check: submitted flagged_violations vs actual flagged state
+                consistency_penalty = self._report_consistency_penalty(action.report)
+                if consistency_penalty > 0:
+                    self._state.penalties += consistency_penalty
+                    reward_components["report_inconsistency_penalty"] = -round(consistency_penalty, 4)
+                    reward_value -= consistency_penalty
+                    report_quality_components["consistency_penalty"] = round(consistency_penalty, 4)
+
+                self._state.report_generated = True
+
         # Clamp to [-1, 1]
         reward_value = max(-1.0, min(1.0, reward_value))
+
+        grader = grader_for_difficulty(self._state.difficulty)
+        breakdown = grader.grade(self._state)
+        task_score = breakdown.score
+        failure_mode = breakdown.failure_mode
 
         reward_model = AuditReward(
             value=reward_value,
             components=reward_components,
             rationale=(
-                "Shaped reward: +0.2 correct rule application, +0.5 correct violation flag, "
-                "-0.3 false positive, -0.05 redundant action, terminal grader bonus on report."
+                "Shaped reward: +0.06 first inspect, +0.2 correct rule application, "
+                "+0.5 correct violation flag, -0.3 false positive, -0.05 redundant action, "
+                "-0.10 loop exploit detection, terminal grader bonus on report. "
+                "Events, loop detection, report consistency check active."
             ),
+            failure_mode=failure_mode,
         )
-
-        task_score = grader_for_difficulty(self._state.difficulty).grade(self._state).score
 
         action_text = self._action_text(action)
         self._state.action_history.append(action_text)
@@ -176,9 +248,16 @@ class ComplianceAuditEnv:
             info={
                 "reward_model": reward_model.model_dump(),
                 "task_score": task_score,
+                "failure_mode": failure_mode,
                 "difficulty": self._state.difficulty,
                 "report_quality_score": report_quality_score,
                 "report_quality_components": report_quality_components,
+                "grading_breakdown": breakdown.components,
+                "events_fired_this_step": [
+                    e.model_dump()
+                    for e in self._state.event_schedule
+                    if e.fired and e.trigger_step == self._state.step_count
+                ],
             },
         )
 
@@ -197,7 +276,7 @@ class ComplianceAuditEnv:
     # ------------------------------------------------------------------
 
     def _dispatch(
-        self, action: AuditAction, is_repeat: bool
+        self, action: AuditAction
     ) -> Tuple[float, Dict[str, float]]:
         assert self._state is not None
         components: Dict[str, float] = {}
@@ -216,9 +295,16 @@ class ComplianceAuditEnv:
 
         record = self._state.records[action.record_id]
 
+        # ── SYSTEM_OUTAGE guard ───────────────────────────────────────
+        if record.system_outage:
+            raise ValueError(
+                f"Record {action.record_id!r} is currently unavailable due to a system outage. "
+                f"Outage ends at step {record.outage_ends_at_step}."
+            )
+
         # ── inspect_record ────────────────────────────────────────────
         if action.action_type == ActionType.INSPECT_RECORD:
-            if is_repeat or record.inspected:
+            if record.inspected:
                 self._state.penalties += 0.02
                 components["inspect_repeat"] = -0.02
                 return -0.02, components
@@ -242,15 +328,18 @@ class ComplianceAuditEnv:
                     f"Active rules: {self._state.active_rule_ids}"
                 )
             if action.rule_id in record.rules_applied:
-                if is_repeat:
-                    self._state.penalties += 0.05
-                    components["rule_repeat"] = -0.05
-                    return -0.05, components
+                self._state.penalties += 0.05
+                components["rule_repeat"] = -0.05
+                return -0.05, components
 
-            # Run the rule engine
+            # Run the rule engine with evidence + policy overrides
             rule = RULES[action.rule_id]
             all_fields = [r.fields for r in self._state.records.values()]
-            is_violation = rule.evaluate(record.fields, all_fields)
+            policy_override = self._state.policy_overrides.get(action.rule_id)
+
+            is_violation, reason_codes, evidence = rule.evaluate_with_evidence(
+                record.fields, all_fields, policy_override
+            )
 
             if action.rule_id not in record.rules_applied:
                 record.rules_applied.append(action.rule_id)
@@ -260,8 +349,8 @@ class ComplianceAuditEnv:
                 record_id=action.record_id,
                 rule_id=action.rule_id,
                 outcome="violation_detected" if is_violation else "no_violation",
-                reason_codes=self._reason_codes_for_apply_rule(action.rule_id, is_violation),
-                rule_evidence=self._build_rule_evidence(action.record_id, action.rule_id, is_violation),
+                reason_codes=reason_codes,
+                rule_evidence=evidence,
             )
 
             if is_violation:
@@ -282,6 +371,20 @@ class ComplianceAuditEnv:
                 return -0.05, components
 
             is_true_violation = action.rule_id in record.expected_violations
+
+            # Check if a RECORD_AMENDMENT has since resolved this violation
+            # (if the rule now evaluates to False after amendment, treat as false positive)
+            if is_true_violation:
+                rule = RULES[action.rule_id]
+                all_fields = [r.fields for r in self._state.records.values()]
+                policy_override = self._state.policy_overrides.get(action.rule_id)
+                current_eval, _, _ = rule.evaluate_with_evidence(
+                    record.fields, all_fields, policy_override
+                )
+                if not current_eval:
+                    # Amendment resolved the violation — flagging now is a false positive
+                    is_true_violation = False
+
             record.flagged_violations.append(action.rule_id)
 
             self._state.last_decision_trace = DecisionTrace(
@@ -340,14 +443,19 @@ class ComplianceAuditEnv:
         violations_found = []
 
         for rec in self._state.records.values():
-            # Only expose fields after inspection
+            # Only expose fields after inspection; show outage status always
             fields = dict(rec.fields) if rec.inspected else {}
+            if rec.system_outage:
+                # Show partial info during outage
+                fields = {"_status": "system_unavailable", "_outage_ends_at": rec.outage_ends_at_step}
+
             view = RecordView(
                 record_id=rec.record_id,
                 fields=fields,
                 inspected=rec.inspected,
                 marked_compliant=rec.marked_compliant,
                 flags=list(rec.flagged_violations),
+                system_outage=rec.system_outage,
             )
             visible.append(view)
             if rec.inspected:
@@ -363,6 +471,7 @@ class ComplianceAuditEnv:
                     )
                 )
 
+        fired_events = [e for e in self._state.event_schedule if e.fired]
         remaining = max(0, self._state.max_steps - self._state.step_count)
 
         return AuditObservation(
@@ -379,6 +488,8 @@ class ComplianceAuditEnv:
             action_history=list(self._state.action_history),
             last_action_error=self._state.last_action_error,
             last_decision_trace=self._state.last_decision_trace,
+            active_events=fired_events,
+            current_policy_overrides=dict(self._state.policy_overrides),
         )
 
     # ------------------------------------------------------------------
@@ -397,39 +508,8 @@ class ComplianceAuditEnv:
         return "(" + ", ".join(parts) + ")"
 
     @staticmethod
-    def _reason_codes_for_apply_rule(rule_id: str, is_violation: bool) -> List[str]:
-        status = "rule_condition_met" if is_violation else "rule_condition_not_met"
-        return [status, f"rule_id:{rule_id}"]
-
-    @staticmethod
     def _reason_codes_for_flag(is_true_violation: bool) -> List[str]:
         return ["flag_matches_ground_truth"] if is_true_violation else ["false_positive_flag"]
-
-    def _build_rule_evidence(
-        self, record_id: str, rule_id: str, is_violation: bool
-    ) -> Dict[str, Any]:
-        assert self._state is not None
-        fields = self._state.records[record_id].fields
-        candidate_keys = {
-            "R1": ["age", "hours"],
-            "R2": ["role", "hours"],
-            "R3": ["role", "salary"],
-            "R4": ["id"],
-            "R5": ["contract_end", "status"],
-            "R6": ["role", "background_check"],
-            "R7": ["hours", "overtime_approved"],
-            "R8": ["status", "compliance_training"],
-            "R9": ["pii_access", "gdpr_consent"],
-            "R10": ["id", "name", "role", "hours", "salary"],
-        }
-        keys = candidate_keys.get(rule_id, [])
-        evidence_fields = {k: fields.get(k) for k in keys}
-        return {
-            "rule_id": rule_id,
-            "condition": RULES[rule_id].condition_summary if rule_id in RULES else rule_id,
-            "record_fields": evidence_fields,
-            "result": "violation" if is_violation else "compliant",
-        }
 
     def _build_flag_evidence(
         self, record_id: str, rule_id: str, is_true_violation: bool
@@ -442,6 +522,30 @@ class ComplianceAuditEnv:
             "already_flagged_for_record": list(record.flagged_violations),
         }
 
+    def _report_consistency_penalty(self, report: Dict[str, Any]) -> float:
+        """Compute a penalty when the report's flagged_violations contradicts actual state.
+
+        Compares the set of (record_id, rule_id) pairs in the submitted report
+        against the set of pairs that were actually flagged via flag_violation.
+        Returns a penalty in [0, 0.20].
+        """
+        assert self._state is not None
+
+        reported_pairs = self._parse_report_pairs(report.get("flagged_violations"))
+        actual_pairs: Set[Tuple[str, str]] = set()
+        for rec in self._state.records.values():
+            for rule_id in rec.flagged_violations:
+                actual_pairs.add((rec.record_id, rule_id))
+
+        if not reported_pairs and not actual_pairs:
+            return 0.0
+
+        # Symmetric difference: pairs in report but not flagged (or vice versa)
+        discrepancy = len(reported_pairs.symmetric_difference(actual_pairs))
+        total = max(len(reported_pairs), len(actual_pairs), 1)
+        inconsistency_ratio = discrepancy / total
+        return round(0.20 * inconsistency_ratio, 4)
+
     def _score_report_payload(self, report: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
         """Score report completeness/consistency in [0, 1]."""
         assert self._state is not None
@@ -451,11 +555,13 @@ class ComplianceAuditEnv:
         has_violations = isinstance(report.get("flagged_violations"), list)
         has_compliant = isinstance(report.get("compliant_records"), list)
         has_recommendations = bool(report.get("recommendations"))
+        has_confidence = isinstance(report.get("audit_confidence"), dict)
 
-        completeness += 0.20 if has_summary else 0.0
-        completeness += 0.30 if has_violations else 0.0
-        completeness += 0.20 if has_compliant else 0.0
-        completeness += 0.30 if has_recommendations else 0.0
+        completeness += 0.15 if has_summary else 0.0
+        completeness += 0.25 if has_violations else 0.0
+        completeness += 0.15 if has_compliant else 0.0
+        completeness += 0.25 if has_recommendations else 0.0
+        completeness += 0.20 if has_confidence else 0.0  # new: confidence section
 
         expected_pairs: Set[Tuple[str, str]] = set()
         marked_compliant_expected: Set[str] = set()
@@ -472,15 +578,75 @@ class ComplianceAuditEnv:
         compliant_f1 = self._f1_score(marked_compliant_expected, reported_compliant)
         consistency = 0.70 * pair_f1 + 0.30 * compliant_f1
 
-        quality_score = max(0.0, min(1.0, 0.50 * completeness + 0.50 * consistency))
+        # Score audit confidence section
+        confidence_score = 0.0
+        if has_confidence:
+            confidence_score = self._score_confidence_section(report["audit_confidence"])
+
+        quality_score = max(
+            0.0,
+            min(
+                1.0,
+                0.40 * completeness + 0.45 * consistency + 0.15 * confidence_score
+            ),
+        )
         components = {
             "completeness": round(completeness, 4),
             "consistency": round(consistency, 4),
             "pair_f1": round(pair_f1, 4),
             "compliant_f1": round(compliant_f1, 4),
+            "confidence_score": round(confidence_score, 4),
             "quality_score": round(quality_score, 4),
         }
         return quality_score, components
+
+    def _score_confidence_section(self, confidence: Dict[str, Any]) -> float:
+        """Score the audit_confidence section [0, 1].
+
+        Checks:
+        - evidence_coverage_ratio accuracy (vs actual records_inspected / total)
+        - high_confidence_flags recall: proportion of true violations that the agent
+          declares high-confidence (rewards correct certainty)
+        - uncertain_flags penalty: if uncertain_flags contains true violations the
+          agent already correctly flagged, that's penalised (should be confident)
+        """
+        assert self._state is not None
+
+        score = 0.0
+
+        # evidence_coverage_ratio accuracy
+        actual_coverage = sum(
+            1 for r in self._state.records.values() if r.inspected
+        ) / max(len(self._state.records), 1)
+        stated_coverage = float(confidence.get("evidence_coverage_ratio", 0.0))
+        coverage_accuracy = 1.0 - min(1.0, abs(actual_coverage - stated_coverage))
+        score += 0.40 * coverage_accuracy
+
+        # Recall of high_confidence_flags on true violations
+        true_pairs: Set[str] = set()
+        for rec in self._state.records.values():
+            for rule_id in rec.expected_violations:
+                true_pairs.add(f"{rec.record_id}:{rule_id}")
+
+        hc_flags = set(confidence.get("high_confidence_flags", []))
+        if true_pairs:
+            hc_recall = len(hc_flags & true_pairs) / len(true_pairs)
+        else:
+            hc_recall = 1.0
+        score += 0.40 * hc_recall
+
+        # Uncertain flags should not contain already-confirmed violations
+        uncertain = set(confidence.get("uncertain_flags", []))
+        confirmed_flagged: Set[str] = set()
+        for rec in self._state.records.values():
+            for rule_id in rec.flagged_violations:
+                if rule_id in rec.expected_violations:
+                    confirmed_flagged.add(f"{rec.record_id}:{rule_id}")
+        false_uncertain = len(uncertain & confirmed_flagged)
+        uncertainty_penalty = min(0.20, false_uncertain * 0.05)
+        score += 0.20 * (1.0 - min(1.0, uncertainty_penalty / 0.20))
+
+        return max(0.0, min(1.0, score))
 
     @staticmethod
     def _parse_report_pairs(payload: Any) -> Set[Tuple[str, str]]:

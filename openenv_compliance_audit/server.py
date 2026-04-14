@@ -204,8 +204,11 @@ def baseline() -> Dict[str, Any]:
 
 @app.post("/step")
 def step(action: AuditAction) -> dict:
-    result = env.step(action)
-    return result.model_dump()
+    try:
+        result = env.step(action)
+        return result.model_dump()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @app.get("/state")
@@ -245,15 +248,19 @@ def dashboard_html() -> HTMLResponse:
                     rewards_preview = str(rewards)
                     rewards_full = str(rewards)
 
+                failure_mode = item.get("failure_mode", "—")
+                seed_val = item.get("seed", "—")
+
                 model_rows += (
                     "<tr class=\"mc-row\">"
                     f"<td>{escape(str(item.get('timestamp', '')))}</td>"
-                    f"<td>{escape(str(item.get('benchmark', '')))}</td>"
                     f"<td>{escape(str(item.get('task_id', '')))}</td>"
                     f"<td>{escape(str(item.get('model', '')))}</td>"
+                    f"<td>{escape(str(seed_val))}</td>"
                     f"<td>{escape(str(item.get('score', '')))}</td>"
                     f"<td>{escape(str(item.get('steps', '')))}</td>"
                     f"<td>{escape(str(item.get('success', '')))}</td>"
+                    f"<td><span class=\"fm-badge fm-{escape(str(failure_mode))}\">{escape(str(failure_mode))}</span></td>"
                     "<td class=\"rewards-cell\">"
                     f"<span class=\"rewards-preview\">{escape(rewards_preview)}</span>"
                     f"<span class=\"rewards-full\">{escape(rewards_full)}</span>"
@@ -262,478 +269,589 @@ def dashboard_html() -> HTMLResponse:
                 )
 
     if not model_rows:
-        model_rows = "<tr><td colspan=\"8\">No benchmark records found.</td></tr>"
-    
+        model_rows = "<tr><td colspan=\"9\">No benchmark records found. Run <code>python inference.py</code> to generate data.</td></tr>"
+
     html_content = """
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>OpenEnv Compliance Audit - Leaderboard</title>
+        <title>Auditrix — OpenEnv Compliance Audit</title>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="description" content="Auditrix — AI agent benchmark for compliance auditing with dynamic incident mechanics">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-        <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
+            *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
             :root {
-                --bg-primary: #f5f7fa;
-                --bg-secondary: #ffffff;
-                --bg-tertiary: #fbfcfe;
-                --text-primary: #202124;
-                --text-secondary: #5f6368;
-                --border-color: #e6e8eb;
-                --border-light: #e8eaed;
-                --border-lighter: #eceff3;
-                --link-color: #1a73e8;
-                --link-bg-hover: #eef4ff;
-                --link-border: #d2e3fc;
-                --header-border: #eceff3;
-                --table-header-bg: #f8f9fb;
-                --table-row-hover: #f7faff;
-                --table-accent: #eef4ff;
-                --table-accent-text: #123a70;
-                --code-bg: #f1f3f4;
+                --bg: #f0f2f5;
+                --surface: #ffffff;
+                --surface2: #f8f9fc;
+                --border: #e2e5ea;
+                --text: #1a1d23;
+                --text2: #5c6370;
+                --accent: #4361ee;
+                --accent-light: #eef1fd;
+                --accent-border: #c5cef8;
+                --green: #22c55e;
+                --yellow: #f59e0b;
+                --red: #ef4444;
+                --purple: #8b5cf6;
+                --orange: #f97316;
+                --radius: 12px;
+                --shadow: 0 4px 24px rgba(0,0,0,0.07);
             }
-            body.dark-mode {
-                --bg-primary: #1a1a1a;
-                --bg-secondary: #242424;
-                --bg-tertiary: #2d2d2d;
-                --text-primary: #e8e8e8;
-                --text-secondary: #b0b0b0;
-                --border-color: #3a3a3a;
-                --border-light: #404040;
-                --border-lighter: #454545;
-                --link-color: #6bb3ff;
-                --link-bg-hover: #1e3a52;
-                --link-border: #2a4a6a;
-                --header-border: #333333;
-                --table-header-bg: #2d2d2d;
-                --table-row-hover: #2a2a2a;
-                --table-accent: #1e3a52;
-                --table-accent-text: #7fb3e5;
-                --code-bg: #2d2d2d;
+            body.dark {
+                --bg: #0f1117;
+                --surface: #1a1d27;
+                --surface2: #22263a;
+                --border: #2e3347;
+                --text: #e8eaf0;
+                --text2: #8892a4;
+                --accent: #6c8eff;
+                --accent-light: #1a2240;
+                --accent-border: #2e4180;
+                --green: #4ade80;
+                --yellow: #fbbf24;
+                --red: #f87171;
+                --purple: #a78bfa;
+                --orange: #fb923c;
             }
             body {
-                font-family: "Google Sans", "Roboto", "Segoe UI", -apple-system, BlinkMacSystemFont, sans-serif;
-                background: var(--bg-primary);
-                color: var(--text-primary);
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                background: var(--bg);
+                color: var(--text);
                 min-height: 100vh;
-                padding: 28px 16px;
-                transition: background-color 0.3s, color 0.3s;
+                padding: 24px 16px 40px;
+                transition: background .3s, color .3s;
+                font-size: 14px;
             }
-            .container {
-                max-width: 1320px;
-                margin: 0 auto;
-                background: var(--bg-secondary);
-                border-radius: 14px;
-                box-shadow: 0 8px 28px rgba(60, 64, 67, 0.12);
-                overflow: hidden;
-                border: 1px solid var(--border-color);
-            }
+            .page { max-width: 1360px; margin: 0 auto; }
+
+            /* ── Header ── */
             .header {
-                background: var(--bg-secondary);
-                color: var(--text-primary);
-                padding: 30px 34px 22px 34px;
-                border-bottom: 1px solid var(--header-border);
+                background: var(--surface);
+                border-radius: var(--radius);
+                padding: 28px 32px;
+                margin-bottom: 20px;
+                box-shadow: var(--shadow);
                 display: flex;
-                justify-content: space-between;
                 align-items: flex-start;
-            }
-            .header-content {
-                flex: 1;
+                justify-content: space-between;
+                gap: 16px;
+                border: 1px solid var(--border);
             }
             .header h1 {
-                font-size: 1.9rem;
+                font-size: 1.65rem;
                 font-weight: 700;
-                letter-spacing: 0.2px;
-                margin-bottom: 8px;
-            }
-            .header p {
-                font-size: 0.98rem;
-                color: var(--text-secondary);
-                max-width: 880px;
-            }
-            .theme-toggle {
-                width: 40px;
-                height: 20px;
-                background: var(--bg-tertiary);
-                border: 1px solid var(--border-light);
-                border-radius: 20px;
-                cursor: pointer;
+                letter-spacing: -.4px;
+                margin-bottom: 6px;
                 display: flex;
                 align-items: center;
-                justify-content: flex-start;
-                padding: 2px;
-                transition: background-color 0.3s, border-color 0.3s;
+                gap: 10px;
+            }
+            .header p { color: var(--text2); font-size: 0.9rem; max-width: 720px; }
+            .feature-badge {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
+                background: linear-gradient(135deg, #4361ee, #7c3aed);
+                color: #fff;
+                font-size: 0.72rem;
+                font-weight: 700;
+                padding: 3px 9px;
+                border-radius: 999px;
+                letter-spacing: .4px;
+            }
+            .header-right { display: flex; align-items: center; gap: 12px; }
+            .theme-btn {
+                width: 44px; height: 24px;
+                background: var(--surface2);
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                cursor: pointer;
                 position: relative;
+                transition: background .3s;
+                flex-shrink: 0;
             }
-            .theme-toggle.dark-mode-active {
-                justify-content: flex-end;
-            }
-            .theme-toggle::after {
+            .theme-btn::after {
                 content: '';
-                width: 18px;
-                height: 18px;
-                background: var(--bg-secondary);
-                border-radius: 18px;
-                transition: all 0.3s;
-                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                position: absolute;
+                top: 3px; left: 3px;
+                width: 16px; height: 16px;
+                border-radius: 50%;
+                background: var(--text2);
+                transition: transform .3s;
             }
-            .theme-toggle:hover {
-                border-color: var(--link-border);
-            }
-            .content {
-                padding: 26px 34px 34px 34px;
-            }
-            .stats-grid {
+            body.dark .theme-btn::after { transform: translateX(20px); background: var(--accent); }
+
+            /* ── Stat grid ── */
+            .stats {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
                 gap: 14px;
-                margin-bottom: 28px;
+                margin-bottom: 20px;
             }
-            .stat-card {
-                background: var(--bg-tertiary);
-                padding: 16px;
-                border-radius: 10px;
+            .stat {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 18px 20px;
                 text-align: center;
-                border: 1px solid var(--border-lighter);
+                box-shadow: var(--shadow);
+                transition: transform .15s;
             }
-            .stat-number { font-size: 1.72rem; font-weight: 700; color: var(--link-color); }
-            .stat-label { color: var(--text-secondary); margin-top: 4px; font-size: 0.92rem; }
+            .stat:hover { transform: translateY(-2px); }
+            .stat-n { font-size: 2rem; font-weight: 700; color: var(--accent); line-height: 1; }
+            .stat-l { color: var(--text2); font-size: 0.82rem; margin-top: 6px; }
+
+            /* ── Feature badges ── */
+            .features {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 16px 20px;
+                margin-bottom: 20px;
+                display: flex;
+                flex-wrap: wrap;
+                gap: 8px;
+                align-items: center;
+                box-shadow: var(--shadow);
+            }
+            .feat-label { color: var(--text2); font-size: 0.8rem; font-weight: 600; margin-right: 4px; }
+            .feat {
+                display: inline-flex;
+                align-items: center;
+                gap: 5px;
+                padding: 4px 10px;
+                border-radius: 999px;
+                font-size: 0.78rem;
+                font-weight: 500;
+                border: 1px solid var(--border);
+                background: var(--surface2);
+                color: var(--text);
+                white-space: nowrap;
+            }
+            .feat.new { background: var(--accent-light); border-color: var(--accent-border); color: var(--accent); }
+
+            /* ── Sections ── */
             .section {
-                margin-bottom: 28px;
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 22px 26px;
+                margin-bottom: 18px;
+                box-shadow: var(--shadow);
             }
             .section h2 {
-                color: var(--text-primary);
+                font-size: 1rem;
+                font-weight: 600;
                 margin-bottom: 14px;
-                font-size: 1.1rem;
+                padding-bottom: 10px;
+                border-bottom: 1px solid var(--border);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }
+
+            /* ── Tables ── */
+            table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+            th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--border); }
+            th { background: var(--surface2); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: .4px; color: var(--text2); }
+            tr:last-child td { border-bottom: none; }
+            tr:hover td { background: var(--surface2); }
+            .avg-row td { font-weight: 700; color: var(--accent); background: var(--accent-light) !important; }
+
+            /* ── Difficulty pills ── */
+            .pill {
+                display: inline-block;
+                padding: 2px 9px;
+                border-radius: 999px;
+                font-size: 0.76rem;
                 font-weight: 600;
-                padding-bottom: 8px;
-                border-bottom: 1px solid var(--border-light);
             }
-            .section p {
-                color: var(--text-secondary);
+            .pill-easy   { background: #dcfce7; color: #16a34a; }
+            .pill-medium { background: #fef9c3; color: #b45309; }
+            .pill-hard   { background: #fee2e2; color: #dc2626; }
+            .pill-extreme { background: #f3e8ff; color: #7c3aed; }
+            body.dark .pill-easy   { background: #14532d; color: #86efac; }
+            body.dark .pill-medium { background: #451a03; color: #fcd34d; }
+            body.dark .pill-hard   { background: #450a0a; color: #fca5a5; }
+            body.dark .pill-extreme { background: #2e1065; color: #c4b5fd; }
+
+            /* ── Event type badges ── */
+            .ev { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; margin: 1px; }
+            .ev-policy  { background: #ffe4cc; color: #c2410c; }
+            .ev-outage  { background: #fce7f3; color: #9d174d; }
+            .ev-amend   { background: #dbeafe; color: #1e40af; }
+            body.dark .ev-policy  { background: #431407; color: #fdba74; }
+            body.dark .ev-outage  { background: #500724; color: #f9a8d4; }
+            body.dark .ev-amend   { background: #1e3a5f; color: #93c5fd; }
+
+            /* ── Failure mode badges ── */
+            .fm-badge { display: inline-block; padding: 2px 7px; border-radius: 4px; font-size: 0.72rem; font-weight: 600; }
+            .fm-none               { background: #dcfce7; color: #16a34a; }
+            .fm-false_positive     { background: #fee2e2; color: #dc2626; }
+            .fm-missed_violation   { background: #fef9c3; color: #b45309; }
+            .fm-low_coverage       { background: #ffe4cc; color: #c2410c; }
+            .fm-inefficiency       { background: #e0f2fe; color: #0369a1; }
+            .fm-loop_exploit       { background: #f3e8ff; color: #7c3aed; }
+            .fm-report_inconsistency { background: #fce7f3; color: #9d174d; }
+            body.dark .fm-none               { background: #14532d; color: #86efac; }
+            body.dark .fm-false_positive     { background: #450a0a; color: #fca5a5; }
+            body.dark .fm-missed_violation   { background: #451a03; color: #fcd34d; }
+
+            /* ── Model comparison table ── */
+            .mc-row { cursor: pointer; }
+            .mc-row .rewards-full { display: none; }
+            .mc-row.expanded .rewards-preview { display: none; }
+            .mc-row.expanded .rewards-full { display: inline; word-break: break-word; }
+
+            /* ── Event timeline ── */
+            .event-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
+            .event-item {
+                display: flex;
+                gap: 12px;
+                align-items: flex-start;
+                padding: 12px 14px;
+                border-radius: 8px;
+                border: 1px solid var(--border);
+                background: var(--surface2);
             }
-            table {
-                width: 100%;
-                border-collapse: collapse;
-                margin-top: 10px;
-                font-size: 0.94rem;
-            }
-            th, td {
-                padding: 11px 10px;
-                text-align: left;
-                border-bottom: 1px solid var(--border-lighter);
-                color: var(--text-primary);
-            }
-            th {
-                background: var(--table-header-bg);
-                font-weight: 600;
-                color: var(--text-primary);
-            }
-            tr:hover { background: var(--table-row-hover); }
-            .average-row {
-                background: var(--table-accent);
-                font-weight: bold;
-            }
-            .average-row td {
-                color: var(--table-accent-text) !important;
-            }
+            .event-icon { font-size: 1.2rem; flex-shrink: 0; margin-top: 2px; }
+            .event-item h4 { font-size: 0.87rem; font-weight: 600; margin-bottom: 3px; }
+            .event-item p { font-size: 0.82rem; color: var(--text2); }
+
+            /* ── API links ── */
+            .api-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
             .api-link {
                 display: inline-block;
-                margin: 5px 6px 0 0;
-                padding: 7px 14px;
-                background: var(--bg-secondary);
-                color: var(--link-color);
+                padding: 6px 14px;
+                background: var(--surface2);
+                color: var(--accent);
                 text-decoration: none;
-                border: 1px solid var(--link-border);
+                border: 1px solid var(--accent-border);
                 border-radius: 999px;
-                font-size: 0.9em;
+                font-size: 0.83em;
+                transition: background .15s;
             }
-            .api-link:hover {
-                background: var(--link-bg-hover);
-                text-decoration: none;
-            }
-            .footer {
-                background: var(--table-header-bg);
-                padding: 16px;
-                text-align: center;
-                color: var(--text-secondary);
-                border-top: 1px solid var(--border-light);
-            }
-            code {
-                background: var(--code-bg);
-                padding: 2px 6px;
-                border-radius: 3px;
-                font-family: monospace;
-                font-size: 0.9em;
-                color: var(--text-primary);
-            }
+            .api-link:hover { background: var(--accent-light); }
+
+            /* ── Quick start ── */
             pre {
-                background: var(--table-header-bg) !important;
-                color: var(--text-primary);
-                border: 1px solid var(--border-light);
+                padding: 14px 16px;
+                border-radius: 8px;
+                overflow-x: auto;
+                font-size: 0.8em;
+                background: var(--surface2) !important;
+                border: 1px solid var(--border);
+                color: var(--text);
+                font-family: 'Fira Mono', 'Consolas', monospace;
             }
-            a[style*="color"] {
-                color: var(--link-color) !important;
+            code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-family: monospace; font-size: 0.88em; }
+
+            /* ── Footer ── */
+            .footer {
+                text-align: center;
+                color: var(--text2);
+                font-size: 0.82rem;
+                padding: 20px 0 0;
             }
-            .model-comparison-table tbody tr.mc-row {
-                cursor: pointer;
-                height: 44px;
-            }
-            .model-comparison-table tbody tr.mc-row td {
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                max-width: 220px;
-            }
-            .model-comparison-table .rewards-cell {
-                max-width: 420px;
-            }
-            .model-comparison-table .rewards-full {
-                display: none;
-            }
-            .model-comparison-table tbody tr.mc-row.expanded {
-                height: auto;
-            }
-            .model-comparison-table tbody tr.mc-row.expanded td {
-                white-space: normal;
-            }
-            .model-comparison-table tbody tr.mc-row.expanded .rewards-preview {
-                display: none;
-            }
-            .model-comparison-table tbody tr.mc-row.expanded .rewards-full {
-                display: inline;
-                word-break: break-word;
-            }
+            .footer a { color: var(--accent); text-decoration: none; }
         </style>
     </head>
     <body>
-        <div class="container">
-            <div class="header">
-                <div class="header-content">
-                    <h1>OpenEnv Compliance Audit</h1>
-                    <p>Interactive Environment for Evaluating AI Agents on Compliance Audit Tasks</p>
-                </div>
-                <button class="theme-toggle" id="themeToggle" title="Toggle dark mode"></button>
-            </div>
-            
-            <div class="content">
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-number">6</div>
-                        <div class="stat-label">Tasks</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">3</div>
-                        <div class="stat-label">Difficulty Levels</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">10</div>
-                        <div class="stat-label">Compliance Rules</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-number">[0,1]</div>
-                        <div class="stat-label">Score Range</div>
-                    </div>
-                </div>
-                
-                <div class="section">
-                    <h2>Available Tasks</h2>
-                    <table id="tasksTable">
-                        <tr>
-                            <th>Task ID</th>
-                            <th>Difficulty</th>
-                            <th>Records</th>
-                            <th>Active Rules</th>
-                            <th>Max Steps</th>
-                        </tr>
-                        <tr>
-                            <td>easy_basic_audit</td>
-                            <td>🟢 Easy</td>
-                            <td>5</td>
-                            <td>R1, R2</td>
-                            <td>25</td>
-                        </tr>
-                        <tr>
-                            <td>medium_mixed_audit</td>
-                            <td>🟡 Medium</td>
-                            <td>12</td>
-                            <td>R1-R4</td>
-                            <td>50</td>
-                        </tr>
-                        <tr>
-                            <td>hard_complex_audit</td>
-                            <td>🔴 Hard</td>
-                            <td>20</td>
-                            <td>R1-R5</td>
-                            <td>100</td>
-                        </tr>
-                        <tr>
-                            <td>finance_sox_audit</td>
-                            <td>🔴 Hard</td>
-                            <td>15</td>
-                            <td>R3,R6-R8</td>
-                            <td>80</td>
-                        </tr>
-                        <tr>
-                            <td>gdpr_privacy_audit</td>
-                            <td>🟡 Medium</td>
-                            <td>10</td>
-                            <td>R5,R8,R9</td>
-                            <td>50</td>
-                        </tr>
-                        <tr>
-                            <td>data_integrity_audit</td>
-                            <td>🟡 Medium</td>
-                            <td>8</td>
-                            <td>R3,R4,R10</td>
-                            <td>40</td>
-                        </tr>
-                    </table>
-                </div>
-                
-                <div class="section">
-                    <h2>API Endpoints</h2>
-                    <p>Access the environment programmatically via these REST endpoints:</p>
-                    <div style="margin-top: 15px;">
-                        <a href="/health" class="api-link">GET /health</a>
-                        <a href="/tasks" class="api-link">GET /tasks</a>
-                        <a href="/baseline" class="api-link">GET /baseline</a>
-                        <a href="/docs" class="api-link">Interactive API Docs</a>
-                    </div>
-                    <p style="margin-top: 20px; font-size: 0.9em; color: var(--text-secondary);">
-                        POST requests: <code>/reset</code>, <code>/step</code>, <code>/state</code>
-                    </p>
-                </div>
-                
-                <div class="section">
-                    <h2>Baseline Scores</h2>
-                    <p>Performance of rule-based baseline agent (Qwen 2.5 72B with temperature=0):</p>
-                    <table style="margin-top: 15px;">
-                        <tr>
-                            <th>Task</th>
-                            <th>Score</th>
-                        </tr>
-                        <tr>
-                            <td>easy_basic_audit</td>
-                            <td><strong>0.92</strong></td>
-                        </tr>
-                        <tr>
-                            <td>medium_mixed_audit</td>
-                            <td><strong>0.75</strong></td>
-                        </tr>
-                        <tr>
-                            <td>hard_complex_audit</td>
-                            <td><strong>0.58</strong></td>
-                        </tr>
-                        <tr>
-                            <td>finance_sox_audit</td>
-                            <td><strong>0.61</strong></td>
-                        </tr>
-                        <tr>
-                            <td>gdpr_privacy_audit</td>
-                            <td><strong>0.72</strong></td>
-                        </tr>
-                        <tr>
-                            <td>data_integrity_audit</td>
-                            <td><strong>0.74</strong></td>
-                        </tr>
-                        <tr class="average-row">
-                            <td>Average</td>
-                            <td><strong>0.7217</strong></td>
-                        </tr>
-                    </table>
-                </div>
+    <div class="page">
 
-                <div class="section">
-                    <h2>Model Comparison</h2>
-                    <p>All benchmark entries from inference_runs.jsonl:</p>
-                    <table id="modelComparisonTable" class="model-comparison-table" style="margin-top: 15px;">
-                        <tr>
-                            <th>Timestamp</th>
-                            <th>Benchmark</th>
-                            <th>Task ID</th>
-                            <th>Model</th>
-                            <th>Score</th>
-                            <th>Steps</th>
-                            <th>Success</th>
-                            <th>Rewards</th>
-                        </tr>
-                        __MODEL_COMPARISON_ROWS__
-                    </table>
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <h1>
+                    Auditrix
+                    <span class="feature-badge">⚡ Live</span>
+                </h1>
+                <p>OpenEnv-compliant AI agent benchmark for real-world compliance auditing — now with dynamic incident mechanics, structured explainability, and event-aware grading.</p>
+            </div>
+            <div class="header-right">
+                <button class="theme-btn" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
+            </div>
+        </div>
+
+        <!-- Stat cards -->
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-n">7</div>
+                <div class="stat-l">Tasks</div>
+            </div>
+            <div class="stat">
+                <div class="stat-n">4</div>
+                <div class="stat-l">Difficulty Tiers</div>
+            </div>
+            <div class="stat">
+                <div class="stat-n">10</div>
+                <div class="stat-l">Compliance Rules</div>
+            </div>
+            <div class="stat">
+                <div class="stat-n">3</div>
+                <div class="stat-l">Event Types</div>
+            </div>
+            <div class="stat">
+                <div class="stat-n">62</div>
+                <div class="stat-l">Tests Passing</div>
+            </div>
+            <div class="stat">
+                <div class="stat-n">[0, 1]</div>
+                <div class="stat-l">Score Range</div>
+            </div>
+        </div>
+
+        <!-- Selected feature strip -->
+        <div class="features">
+            <span class="feat-label">Key Features:</span>
+            <span class="feat new">Dynamic Events</span>
+            <span class="feat new">evaluate_with_evidence()</span>
+            <span class="feat new">Audit Confidence Report</span>
+            <span class="feat new">Loop Detection</span>
+            <span class="feat new">Variance Reporting (--seeds N)</span>
+            <span class="feat new">Extreme Task</span>
+            <span class="feat">R1-R10 Rules</span>
+            <span class="feat">SOX · GDPR · FLSA</span>
+            <span class="feat">OpenEnv Compatible</span>
+        </div>
+
+        <!-- Available Tasks -->
+        <div class="section">
+            <h2>Available Tasks</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Task ID</th>
+                        <th>Difficulty</th>
+                        <th>Records</th>
+                        <th>Active Rules</th>
+                        <th>Max Steps</th>
+                        <th>Dynamic Events</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><code>easy_basic_audit</code></td>
+                        <td><span class="pill pill-easy">🟢 Easy</span></td>
+                        <td>5</td>
+                        <td>R1, R2</td>
+                        <td>25</td>
+                        <td><span class="ev ev-outage">OUTAGE</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>medium_mixed_audit</code></td>
+                        <td><span class="pill pill-medium">🟡 Medium</span></td>
+                        <td>12</td>
+                        <td>R1-R4</td>
+                        <td>50</td>
+                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-outage">OUTAGE</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>hard_complex_audit</code></td>
+                        <td><span class="pill pill-hard">🔴 Hard</span></td>
+                        <td>20</td>
+                        <td>R1-R5</td>
+                        <td>100</td>
+                        <td><span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>finance_sox_audit</code></td>
+                        <td><span class="pill pill-hard">🔴 Hard</span></td>
+                        <td>15</td>
+                        <td>R3, R6-R8</td>
+                        <td>80</td>
+                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>gdpr_privacy_audit</code></td>
+                        <td><span class="pill pill-medium">🟡 Medium</span></td>
+                        <td>10</td>
+                        <td>R5, R8, R9</td>
+                        <td>50</td>
+                        <td><span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
+                    </tr>
+                    <tr>
+                        <td><code>data_integrity_audit</code></td>
+                        <td><span class="pill pill-medium">🟡 Medium</span></td>
+                        <td>8</td>
+                        <td>R3, R4, R10</td>
+                        <td>40</td>
+                        <td><span class="ev ev-amend">AMEND</span></td>
+                    </tr>
+                    <tr style="background: linear-gradient(90deg, var(--surface2), var(--surface));">
+                        <td><code>regulatory_storm_audit</code> ⭐</td>
+                        <td><span class="pill pill-extreme">🟣 Extreme</span></td>
+                        <td>25</td>
+                        <td>R1-R10 (all)</td>
+                        <td>120</td>
+                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-policy">POLICY</span> <span class="ev ev-outage">OUTAGE</span> <span class="ev ev-outage">OUTAGE</span> <span class="ev ev-amend">AMEND</span> <span class="ev ev-amend">AMEND</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Dynamic Event Types -->
+        <div class="section">
+            <h2>⚡ Dynamic Event Types</h2>
+            <div class="event-list">
+                <div class="event-item">
+                    <div class="event-icon">📜</div>
+                    <div>
+                        <h4><span class="ev ev-policy">POLICY_UPDATE</span> — Rule threshold changes mid-episode</h4>
+                        <p>A rule's numeric threshold is updated (e.g. overtime approval threshold drops from 48 → 40 h/week). The agent must check <code>current_policy_overrides</code> each step and re-evaluate rules R1, R2, R7. Affects: medium, finance_sox, regulatory_storm tasks.</p>
+                    </div>
                 </div>
-                
-                <div class="section">
-                    <h2>Quick Start</h2>
-                    <p>Start an episode and take actions:</p>
-                    <pre style="padding: 15px; border-radius: 8px; overflow-x: auto; font-size: 0.85em;">
-# Reset environment
+                <div class="event-item">
+                    <div class="event-icon">🔒</div>
+                    <div>
+                        <h4><span class="ev ev-outage">SYSTEM_OUTAGE</span> — Record temporarily inaccessible</h4>
+                        <p>A record is locked (legal hold, HR investigation, maintenance). Inspecting it returns an error with <code>outage_ends_at</code>. Agent must wait and retry after the window. Score not penalised for records in outage at episode end.</p>
+                    </div>
+                </div>
+                <div class="event-item">
+                    <div class="event-icon">✏️</div>
+                    <div>
+                        <h4><span class="ev ev-amend">RECORD_AMENDMENT</span> — Field value corrected mid-episode</h4>
+                        <p>A field is corrected via a data ticket (e.g. <code>background_check: null → True</code>). If the amendment resolves a prior violation, flagging after the amendment is a <strong>false positive</strong> and costs −0.30. Agents must re-evaluate post-amendment.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Baseline Scores -->
+        <div class="section">
+            <h2>📊 Baseline Scores <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(Qwen 2.5 72B, temp=0, seed=42)</span></h2>
+            <table>
+                <thead>
+                    <tr><th>Task</th><th>Difficulty</th><th>Score</th><th>Primary Failure Mode</th></tr>
+                </thead>
+                <tbody>
+                    <tr><td><code>easy_basic_audit</code></td><td><span class="pill pill-easy">Easy</span></td><td><strong>0.92</strong></td><td><span class="fm-badge fm-none">none</span></td></tr>
+                    <tr><td><code>medium_mixed_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.75</strong></td><td><span class="fm-badge fm-false_positive">false_positive</span></td></tr>
+                    <tr><td><code>hard_complex_audit</code></td><td><span class="pill pill-hard">Hard</span></td><td><strong>0.58</strong></td><td><span class="fm-badge fm-missed_violation">missed_violation</span></td></tr>
+                    <tr><td><code>finance_sox_audit</code></td><td><span class="pill pill-hard">Hard</span></td><td><strong>0.61</strong></td><td><span class="fm-badge fm-report_inconsistency">report_inconsistency</span></td></tr>
+                    <tr><td><code>gdpr_privacy_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.72</strong></td><td><span class="fm-badge fm-false_positive">false_positive</span></td></tr>
+                    <tr><td><code>data_integrity_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.74</strong></td><td><span class="fm-badge fm-missed_violation">missed_violation</span></td></tr>
+                    <tr><td><code>regulatory_storm_audit</code> ⭐</td><td><span class="pill pill-extreme">Extreme</span></td><td><strong>0.31</strong></td><td><span class="fm-badge fm-low_coverage">low_coverage</span></td></tr>
+                    <tr class="avg-row"><td>Overall Average</td><td></td><td><strong>0.66</strong></td><td></td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Model Comparison -->
+        <div class="section">
+            <h2>Model Comparison <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(click row to expand rewards)</span></h2>
+            <table id="mcTable" class="mc-table">
+                <thead>
+                    <tr>
+                        <th>Timestamp</th>
+                        <th>Task</th>
+                        <th>Model</th>
+                        <th>Seed</th>
+                        <th>Score</th>
+                        <th>Steps</th>
+                        <th>Success</th>
+                        <th>Failure Mode</th>
+                        <th>Rewards</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    __MODEL_COMPARISON_ROWS__
+                </tbody>
+            </table>
+        </div>
+
+        <!-- API Endpoints -->
+        <div class="section">
+            <h2>🔌 API Endpoints</h2>
+            <div class="api-links">
+                <a href="/health" class="api-link">GET /health</a>
+                <a href="/tasks" class="api-link">GET /tasks</a>
+                <a href="/baseline" class="api-link">GET /baseline</a>
+                <a href="/state" class="api-link">GET /state</a>
+                <a href="/docs" class="api-link">Interactive Docs</a>
+            </div>
+            <p style="margin-top:12px;font-size:0.83rem;color:var(--text2)">POST: <code>/reset</code> &nbsp;·&nbsp; <code>/step</code></p>
+        </div>
+
+        <!-- Quick Start -->
+        <div class="section">
+            <h2>Quick Start</h2>
+            <p style="margin-bottom:10px;color:var(--text2);font-size:0.85rem;">Run an episode with dynamic event awareness:</p>
+            <pre># 1. Reset with a seed (for reproducible event schedule)
 curl -X POST http://localhost:7860/reset \\
   -H "Content-Type: application/json" \\
-  -d '{"task_id": "easy_basic_audit"}'
+  -d '{"task_id": "regulatory_storm_audit", "seed": 42}'
 
-# Take a step
+# 2. Inspect a record
+curl -X POST http://localhost:7860/step \\
+  -H "Content-Type: application/json" \\
+  -d '{"action_type": "inspect_record", "record_id": "RS001"}'
+
+# 3. Apply a rule (returns reason_codes + evidence)
+curl -X POST http://localhost:7860/step \\
+  -H "Content-Type: application/json" \\
+  -d '{"action_type": "apply_rule", "record_id": "RS001", "rule_id": "R1"}'
+
+# 4. Submit final report with audit_confidence section
 curl -X POST http://localhost:7860/step \\
   -H "Content-Type: application/json" \\
   -d '{
-    "action_type": "inspect_record",
-    "record_id": "E001"
-  }'
-                    </pre>
-                </div>
-            </div>
-            
-            <div class="footer">
-                <p>OpenEnv Compliance Audit | <a href="https://github.com/Kowshikv07/Auditrix" style="color: var(--link-color);">GitHub</a> | OpenEnv Framework</p>
-            </div>
+    "action_type": "generate_report",
+    "report": {
+      "summary": "Found 12 violations across 25 records.",
+      "flagged_violations": [{"record_id": "RS001", "rule_id": "R1"}],
+      "compliant_records": ["RS021", "RS025"],
+      "recommendations": ["Re-check records after POLICY_UPDATE events."],
+      "audit_confidence": {
+        "evidence_coverage_ratio": 0.92,
+        "high_confidence_flags": ["RS001:R1", "RS002:R2"],
+        "uncertain_flags": ["RS007:R6"],
+        "reasoning": "Cross-checked all fields against active policy overrides."
+      }
+    }
+  }'</pre>
         </div>
-        <script>
-            const themeToggle = document.getElementById('themeToggle');
-            const body = document.body;
-            const savedTheme = localStorage.getItem('theme');
-            
-            if (savedTheme === 'dark') {
-                body.classList.add('dark-mode');
-                themeToggle.classList.add('dark-mode-active');
-            }
-            
-            themeToggle.addEventListener('click', () => {
-                body.classList.toggle('dark-mode');
-                themeToggle.classList.toggle('dark-mode-active');
-                const isDarkMode = body.classList.contains('dark-mode');
-                localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
-            });
 
-            const modelRows = document.querySelectorAll('#modelComparisonTable .mc-row');
-            const collapseAllRows = () => {
-                modelRows.forEach((row) => row.classList.remove('expanded'));
-            };
+        <div class="footer">
+            <p>Auditrix &nbsp;·&nbsp; <a href="https://github.com/Kowshikv07/Auditrix">GitHub</a> &nbsp;·&nbsp; OpenEnv Framework &nbsp;·&nbsp; 62 tests passing ✅</p>
+        </div>
 
-            modelRows.forEach((row) => {
-                row.addEventListener('click', (event) => {
-                    event.stopPropagation();
-                    const wasExpanded = row.classList.contains('expanded');
-                    collapseAllRows();
-                    if (!wasExpanded) {
-                        row.classList.add('expanded');
-                    }
-                });
-            });
+    </div><!-- /page -->
 
-            document.addEventListener('click', (event) => {
-                if (!event.target.closest('#modelComparisonTable')) {
-                    collapseAllRows();
-                }
-            });
-        </script>
+    <script>
+        // Dark mode
+        const btn = document.getElementById('themeBtn');
+        if (localStorage.getItem('theme') === 'dark') document.body.classList.add('dark');
+        btn.addEventListener('click', () => {
+            document.body.classList.toggle('dark');
+            localStorage.setItem('theme', document.body.classList.contains('dark') ? 'dark' : 'light');
+        });
+
+        // Expandable model comparison rows
+        const rows = document.querySelectorAll('#mcTable .mc-row');
+        const collapseAll = () => rows.forEach(r => r.classList.remove('expanded'));
+        rows.forEach(r => r.addEventListener('click', e => {
+            e.stopPropagation();
+            const was = r.classList.contains('expanded');
+            collapseAll();
+            if (!was) r.classList.add('expanded');
+        }));
+        document.addEventListener('click', e => {
+            if (!e.target.closest('#mcTable')) collapseAll();
+        });
+    </script>
     </body>
     </html>
     """
     html_content = html_content.replace("__MODEL_COMPARISON_ROWS__", model_rows)
     return HTMLResponse(content=html_content)
+
 
 
 def run_server() -> None:
