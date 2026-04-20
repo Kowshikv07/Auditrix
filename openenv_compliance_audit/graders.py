@@ -8,19 +8,70 @@ Score formula (per spec §6.3):
       + 0.1 * (1 - steps_used / max_steps)
 
 Difficulty variants slightly reweight the components.
+
+Failure Mode Taxonomy
+---------------------
+Every grader.grade() call returns a GradingBreakdown that includes a dominant
+failure_mode drawn from: false_positive, missed_violation, low_coverage,
+inefficiency, loop_exploit, report_inconsistency, none.
+
+This powers the [END] structured log line in inference.py and the per-seed
+variance reporting.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Dict, Set, Tuple
 
-from .models import AuditState
+from .models import AuditState, FailureMode
 
 
 @dataclass(frozen=True)
 class GradingBreakdown:
     score: float
     components: Dict[str, float]
+    failure_mode: FailureMode = "none"
+
+
+def _classify_failure_mode(
+    state: AuditState,
+    detection_rate: float,
+    false_positive_rate: float,
+    coverage: float,
+    efficiency: float,
+) -> FailureMode:
+    """Classify the dominant failure mode for post-hoc analysis.
+
+    Priority order: loop_exploit > report_inconsistency > false_positive
+    > missed_violation > low_coverage > inefficiency > none.
+    """
+    # Loop exploit: more than 3 loop penalties applied
+    if state.loop_penalty_applied >= 3:
+        return "loop_exploit"
+
+    # Report inconsistency: environment tracked a consistency penalty
+    if state.penalties > 0 and state.report_generated:
+        # Heuristic: large penalty with report generated signals inconsistency
+        if state.penalties >= 0.20:
+            return "report_inconsistency"
+
+    # False positives dominate
+    if false_positive_rate > 0.3:
+        return "false_positive"
+
+    # Many missed violations
+    if detection_rate < 0.5:
+        return "missed_violation"
+
+    # Low coverage
+    if coverage < 0.5:
+        return "low_coverage"
+
+    # Inefficiency
+    if efficiency < 0.1 and state.max_steps > 0:
+        return "inefficiency"
+
+    return "none"
 
 
 class BaseAuditGrader:
@@ -65,11 +116,24 @@ class BaseAuditGrader:
             0.0, 1.0 - (state.step_count / state.max_steps)
         ) if state.max_steps > 0 else 0.0
 
+        # Anti-exploit: loop penalty deduction
+        loop_deduction = min(0.10, state.loop_penalty_applied * 0.02)
+
         score = (
             w_viol * detection_rate
             + w_fp   * (1.0 - false_positive_rate)
             + w_cov  * coverage
             + w_eff  * efficiency
+            - loop_deduction
+        )
+
+        # Coverage floor: if < 50% inspected at report time, cap terminal contribution
+        if coverage < 0.5:
+            score = min(score, 0.5)
+
+        # Failure mode classification
+        failure_mode = _classify_failure_mode(
+            state, detection_rate, false_positive_rate, coverage, efficiency
         )
 
         components = {
@@ -82,10 +146,12 @@ class BaseAuditGrader:
             "false_positives":     false_positives,
             "records_checked":     records_checked,
             "total_records":       total_records,
+            "loop_deduction":      round(loop_deduction, 4),
         }
         return GradingBreakdown(
             score=max(0.0, min(1.0, score)),
             components=components,
+            failure_mode=failure_mode,
         )
 
 
@@ -104,6 +170,134 @@ class HardAuditGrader(BaseAuditGrader):
     WEIGHTS = (0.50, 0.20, 0.20, 0.10)
 
 
+class ExtremeAuditGrader(BaseAuditGrader):
+    """Extreme — false-positive-free detection is paramount.
+
+    Grader formula adjustments:
+      - Detection rate weight raised (catching all violations matters most)
+      - False-positive penalty raised (any FP is heavily penalised)
+      - Coverage floor enforced at 60% (not 50%)
+      - Loop deduction scales more aggressively (0.03 per penalty vs 0.02)
+
+    Threshold checks:
+      - score <= 0.50 if false_positive_rate > 0 (any FP hard-caps partial credit)
+      - score <= 0.30 if coverage < 0.40 (inspecting < 40% records → low score)
+
+    The grader uses expected_violations as the ground truth — including those
+    resolved by RECORD_AMENDMENT events (which the environment applies to the
+    live `fields` dict, making the rule return False after the amendment fires).
+    The agent is not penalised for NOT flagging a violation that was resolved
+    by a mid-episode RECORD_AMENDMENT.
+    """
+
+    WEIGHTS = (0.55, 0.25, 0.15, 0.05)  # Detection + FP precision are paramount
+
+    def grade(self, state: AuditState) -> GradingBreakdown:
+        w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
+
+        # Compute amendment-adjusted ground truth:
+        # If a RECORD_AMENDMENT resolved a violation (field changed mid-episode),
+        # remove it from true_violations so the agent isn't penalised for missing it.
+        amended_resolutions: Set[Tuple[str, str]] = set()
+        for event in state.event_schedule:
+            if event.fired and event.event_type.value == "record_amendment":
+                rec_id = event.record_id
+                field = event.payload.get("field")
+                new_value = event.payload.get("new_value")
+                # For each active rule, check if the amendment resolves the violation
+                if rec_id and field and rec_id in state.records:
+                    rec = state.records[rec_id]
+                    for rule_id in state.active_rule_ids:
+                        # If expected violation exists AND the new field value would make
+                        # the rule return False, mark as resolved
+                        if rule_id in rec.expected_violations:
+                            # We use a simple heuristic: if new_value is truthy / non-None,
+                            # the amendment likely resolved the violation
+                            if new_value is not None and new_value is not False:
+                                amended_resolutions.add((rec_id, rule_id))
+
+        true_violations: Set[Tuple[str, str]] = set()
+        for rec in state.records.values():
+            for rule_id in rec.expected_violations:
+                pair = (rec.record_id, rule_id)
+                if pair not in amended_resolutions:
+                    true_violations.add(pair)
+
+        total_violations = len(true_violations)
+
+        flagged: Set[Tuple[str, str]] = set()
+        for rec in state.records.values():
+            for rule_id in rec.flagged_violations:
+                pair = (rec.record_id, rule_id)
+                # Don't count amended-away violations as false positives
+                if pair not in amended_resolutions:
+                    flagged.add(pair)
+
+        correct_detected = len(flagged & true_violations)
+        false_positives = len(flagged - true_violations)
+        total_flagged = len(flagged)
+
+        detection_rate = (
+            correct_detected / total_violations if total_violations > 0 else 1.0
+        )
+        false_positive_rate = (
+            false_positives / total_flagged if total_flagged > 0 else 0.0
+        )
+        records_checked = sum(1 for r in state.records.values() if r.inspected)
+        total_records = len(state.records) or 1
+        coverage = records_checked / total_records
+
+        efficiency = max(
+            0.0, 1.0 - (state.step_count / state.max_steps)
+        ) if state.max_steps > 0 else 0.0
+
+        # More aggressive loop deduction for extreme difficulty
+        loop_deduction = min(0.15, state.loop_penalty_applied * 0.03)
+
+        score = (
+            w_viol * detection_rate
+            + w_fp   * (1.0 - false_positive_rate)
+            + w_cov  * coverage
+            + w_eff  * efficiency
+            - loop_deduction
+        )
+
+        # Hard cap: any false positive limits score to 0.50
+        if false_positives > 0:
+            score = min(score, 0.50)
+
+        # Hard cap: < 40% coverage → score ≤ 0.30
+        if coverage < 0.40:
+            score = min(score, 0.30)
+
+        # Coverage floor at 60% (not 50%)
+        if coverage < 0.60:
+            score = min(score, 0.65)
+
+        failure_mode = _classify_failure_mode(
+            state, detection_rate, false_positive_rate, coverage, efficiency
+        )
+
+        components = {
+            "detection_rate":       round(detection_rate, 4),
+            "false_positive_rate":  round(false_positive_rate, 4),
+            "coverage":             round(coverage, 4),
+            "efficiency":           round(efficiency, 4),
+            "correct_detected":     correct_detected,
+            "total_violations":     total_violations,
+            "false_positives":      false_positives,
+            "records_checked":      records_checked,
+            "total_records":        total_records,
+            "loop_deduction":       round(loop_deduction, 4),
+            "amended_resolutions":  len(amended_resolutions),
+        }
+        return GradingBreakdown(
+            score=max(0.0, min(1.0, score)),
+            components=components,
+            failure_mode=failure_mode,
+        )
+
+
 def grader_for_difficulty(difficulty: str) -> BaseAuditGrader:
     if difficulty == "easy":
         return EasyAuditGrader()
@@ -111,4 +305,6 @@ def grader_for_difficulty(difficulty: str) -> BaseAuditGrader:
         return MediumAuditGrader()
     if difficulty == "hard":
         return HardAuditGrader()
+    if difficulty == "extreme":
+        return ExtremeAuditGrader()
     raise ValueError(f"Unknown difficulty: {difficulty!r}")

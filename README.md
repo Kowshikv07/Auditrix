@@ -21,7 +21,22 @@ tags:
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-46%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)]()
+
+---
+
+## Hackathon Theme Alignment
+
+Auditrix was designed as a powerhouse solver for two major hackathon themes:
+
+**1. Theme #2: Long-Horizon Planning (Scale AI Bonus - HR & IT Workflows)**
+- Our environment explicitly tackles the **Scale AI Bonus** by providing a long-horizon, multi-step workflow in a business/HR setting (Employee Records, Salaries, Timesheets, Background Checks).
+- The agent must orchestrate dozens of interactions (up to 80 steps), track state over extended trajectories, and deal with highly delayed rewards (the terminal score at the exact end of an audit).
+
+**2. Theme #3.1: World Modeling (Professional Tasks)**
+- Directly tests an agent's ability to orchestrate tool-based professional workflows without exploiting shortcuts. 
+- Features a highly complex **Anti-Exploit Engine** that catches and penalizes recursive loops or hallucinated spam actions, forcing genuine reasoning.
+- Explores world model belief updates through a **Dynamic Event Engine** that injects system outages and policy changes mid-simulation.
 
 ---
 
@@ -41,6 +56,17 @@ This domain is directly applicable to training and evaluating agents for:
 - HR compliance tooling
 - Auditable AI decision-making
 - Finance and payroll control auditing
+
+### Dynamic Audit Environment
+
+| Feature | Description |
+|---|---|
+| **Dynamic Events** | `POLICY_UPDATE`, `SYSTEM_OUTAGE`, `RECORD_AMENDMENT` injected per `(task_id, seed)` |
+| **Structured Explainability** | `evaluate_with_evidence()` returns `reason_codes` + field-level evidence per rule |
+| **Audit Confidence Report** | `generate_report` accepts an `audit_confidence` section with evidence coverage ratio |
+| **Anti-Exploit Grading** | Loop detection (sliding window), report consistency check, coverage floor |
+| **Extreme Task** | `regulatory_storm_audit` — 25 records, all 10 rules, 6 simultaneous dynamic events |
+| **Variance Reporting** | `--seeds N` runs each task N times; reports mean±std + failure mode taxonomy |
 
 ---
 
@@ -350,6 +376,88 @@ python inference.py
 python inference.py --tasks easy_basic_audit finance_sox_audit
 ```
 
+### GRPO Training (Reinforcement Learning)
+
+Train a small model to perform compliance audits using **Group Relative Policy Optimization (GRPO)** with [Unsloth](https://github.com/unslothai/unsloth) + [TRL](https://github.com/huggingface/trl).
+
+The training uses TRL's `environment_factory` pattern — each Auditrix action (inspect, apply_rule, flag, mark_compliant, generate_report) is exposed as a **callable tool** that the model learns to invoke correctly through multi-turn interaction.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  GRPO Training Loop                 │
+│                                                     │
+│  Prompt (task observation)                          │
+│       ↓                                             │
+│  Model generates tool calls (inspect, apply, flag…) │
+│       ↓                                             │
+│  AuditrixToolEnv executes each action               │
+│       ↓                                             │
+│  Environment returns reward per step                │
+│       ↓                                             │
+│  Episode ends → task_score as GRPO reward           │
+│       ↓                                             │
+│  GRPOTrainer computes group-relative advantages     │
+│       ↓                                             │
+│  Model weights updated via LoRA                     │
+└─────────────────────────────────────────────────────┘
+```
+
+```mermaid
+graph TD
+    A["GRPOTrainer"] -->|"generates completions"| B["Model (Qwen2.5-3B + LoRA)"]
+    B -->|"tool calls"| C["AuditrixToolEnv"]
+    C -->|"inspect / apply / flag / mark / report"| D["ComplianceAuditEnv"]
+    D -->|"observation + reward"| C
+    C -->|"task_score"| E["audit_reward_func"]
+    E -->|"group-relative advantages"| A
+```
+
+**Quick start:**
+
+```bash
+# Verify environment + reward function (no GPU needed)
+python train_grpo.py --dry-run
+
+# Train with Unsloth (Colab T4/L4, ~30 minutes)
+python train_grpo.py
+
+# Train without Unsloth (plain HF Transformers + PEFT)
+python train_grpo.py --no-unsloth
+```
+
+**Colab notebook:**
+
+```bash
+# Open Auditrix_GRPO_Training.ipynb in Google Colab (recommend T4/L4 GPU).
+# Includes: install cells, baseline measurement, training, evaluation
+```
+
+**Dry-run output (reward function verification):**
+
+```text
+Task: easy_basic_audit
+  inspect(E001): reward=+0.06    inspect(E002): reward=+0.06
+  apply_rule(E001, R1): VIOLATION DETECTED
+  apply_rule(E002, R2): VIOLATION DETECTED
+  flag(E001, R1): reward=+0.50   flag(E002, R2): reward=+0.50
+  mark_compliant(E003–E005): reward=+0.05 each
+  generate_report: task_score=0.8860
+
+Dry run passed. Environment and reward function are working.
+```
+
+**Key training parameters:**
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| Model | `Qwen2.5-3B-Instruct` | Small enough for Colab T4, large enough to reason |
+| LoRA rank | 64 | Sufficient capacity for tool-calling patterns |
+| Generations/prompt | 4 | GRPO diversity for advantage estimation |
+| Max completion length | 4096 | Multi-turn episodes require long sequences |
+| Reward signal | `task_score` | Composite: detection × precision × coverage × efficiency |
+
+---
+
 ### Interactive Model Leaderboard Dashboard
 
 Visualize model performance rankings with an interactive Streamlit dashboard.
@@ -405,10 +513,12 @@ openenv/
 │   ├── models.py                   # Pydantic typed models
 │   ├── rules.py                    # Rule engine — R1 through R10
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
-│   └── tasks.py                    # 6 task definitions with ground-truth violations
+│   └── tasks.py                    # 7 task definitions with ground-truth violations
 ├── tests/
 │   └── test_environment.py         # 46-test pytest suite
 ├── inference.py                    # Baseline LLM inference script
+├── train_grpo.py                   # GRPO training (Unsloth + TRL environment_factory)
+├── train_grpo_colab.py             # Colab-friendly version with cell markers
 ├── openenv.yaml                    # OpenEnv metadata (v1.0.0)
 ├── pyproject.toml
 ├── Dockerfile
@@ -512,3 +622,20 @@ curl -sS -i -X POST "$SPACE_URL/reset" -H "Content-Type: application/json" -d '{
 # Validator command used for submission gate checks
 bash scripts/validate-submission.sh "$SPACE_URL" .
 ```
+
+---
+
+## Why This Fills a Real Gap in AI Agent Evaluation
+
+Compliance auditing is a **$500B+/year industry** (Deloitte Global Compliance Survey, 2023), yet no existing RL or agent evaluation benchmark covers it with the regulatory specificity Auditrix provides.
+
+Auditrix uniquely combines:
+
+1. **Rule-based logic with exemptions** — inactive employees are exempt from R5/R8; records without PII access are exempt from R9. Agents must understand *when not to apply* a rule.
+2. **Cross-record reasoning** — R4 (duplicate ID) requires comparing across all records simultaneously, not just per-record pattern matching.
+3. **Overlapping constraints** — a single record can violate R5 (expired contract) AND R9 (no consent). Agents must enumerate all applicable violations.
+4. **Dynamic state** — `POLICY_UPDATE` events change thresholds mid-episode; `RECORD_AMENDMENT` corrects violations; `SYSTEM_OUTAGE` blocks records temporarily. Static memorisation of the task fails.
+5. **Precision penalties** — false positives cost -0.30 per flag, forcing *evidence-based flagging* over heuristic pattern matching.
+6. **Calibrated confidence** — the `audit_confidence` section rewards agents that correctly identify their uncertain flags, training well-calibrated reasoning in agentic systems.
+
+---

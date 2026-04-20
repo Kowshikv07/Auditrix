@@ -137,9 +137,12 @@ def test_audit_requires_inspection_first() -> None:
 def test_false_positive_flag_penalised() -> None:
     env = ComplianceAuditEnv(task_id="easy_basic_audit")
     env.reset()
-    env.step(AuditAction(action_type="inspect_record", record_id="E003"))
-    result = env.step(AuditAction(action_type="flag_violation", record_id="E003", rule_id="R1"))
+    # E004 is a manager (not an intern, 35h) — R2 (intern overhours) is a false positive on it
+    env.step(AuditAction(action_type="inspect_record", record_id="E004"))
+    result = env.step(AuditAction(action_type="flag_violation", record_id="E004", rule_id="R2"))
     assert result.reward < 0.0
+
+
 
 
 # ===========================================================================
