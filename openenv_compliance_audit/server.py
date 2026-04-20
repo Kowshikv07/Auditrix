@@ -819,7 +819,7 @@ curl -X POST http://localhost:7860/step \\
         </div>
 
         <div class="footer">
-            <p>Auditrix &nbsp;·&nbsp; <a href="https://github.com/Kowshikv07/Auditrix">GitHub</a> &nbsp;·&nbsp; OpenEnv Framework &nbsp;·&nbsp; 62 tests passing ✅</p>
+            <p>Auditrix &nbsp;·&nbsp; <a href="https://github.com/Kowshikv07/Auditrix">GitHub</a> &nbsp;·&nbsp; OpenEnv Framework &nbsp;·&nbsp; 62 tests passing  </p>
         </div>
 
     </div><!-- /page -->

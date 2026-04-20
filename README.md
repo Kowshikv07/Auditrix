@@ -361,6 +361,78 @@ python inference.py
 python inference.py --tasks easy_basic_audit finance_sox_audit
 ```
 
+### GRPO Training (Reinforcement Learning)
+
+Train a small model to perform compliance audits using **Group Relative Policy Optimization (GRPO)** with [Unsloth](https://github.com/unslothai/unsloth) + [TRL](https://github.com/huggingface/trl).
+
+The training uses TRL's `environment_factory` pattern — each Auditrix action (inspect, apply_rule, flag, mark_compliant, generate_report) is exposed as a **callable tool** that the model learns to invoke correctly through multi-turn interaction.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                  GRPO Training Loop                 │
+│                                                     │
+│  Prompt (task observation)                          │
+│       ↓                                             │
+│  Model generates tool calls (inspect, apply, flag…) │
+│       ↓                                             │
+│  AuditrixToolEnv executes each action               │
+│       ↓                                             │
+│  Environment returns reward per step                │
+│       ↓                                             │
+│  Episode ends → task_score as GRPO reward           │
+│       ↓                                             │
+│  GRPOTrainer computes group-relative advantages     │
+│       ↓                                             │
+│  Model weights updated via LoRA                     │
+└─────────────────────────────────────────────────────┘
+```
+
+**Quick start:**
+
+```bash
+# Verify environment + reward function (no GPU needed)
+python train_grpo.py --dry-run
+
+# Train with Unsloth (Colab T4/L4, ~30 minutes)
+python train_grpo.py
+
+# Train without Unsloth (plain HF Transformers + PEFT)
+python train_grpo.py --no-unsloth
+```
+
+**Colab notebook:**
+
+```bash
+# Run train_grpo_colab.py with # %% cell markers or convert to .ipynb
+# Includes: install cells, baseline measurement, training, evaluation
+```
+
+**Dry-run output (reward function verification):**
+
+```text
+Task: easy_basic_audit
+  inspect(E001): reward=+0.06    inspect(E002): reward=+0.06
+  apply_rule(E001, R1): VIOLATION DETECTED
+  apply_rule(E002, R2): VIOLATION DETECTED
+  flag(E001, R1): reward=+0.50   flag(E002, R2): reward=+0.50
+  mark_compliant(E003–E005): reward=+0.05 each
+  generate_report: task_score=0.8860
+
+Dry run passed. Environment and reward function are working.
+```
+
+**Key training parameters:**
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| Model | `Qwen2.5-3B-Instruct` | Small enough for Colab T4, large enough to reason |
+| LoRA rank | 64 | Sufficient capacity for tool-calling patterns |
+| Generations/prompt | 4 | GRPO diversity for advantage estimation |
+| Max completion length | 4096 | Multi-turn episodes require long sequences |
+| Reward signal | `task_score` | Composite: detection × precision × coverage × efficiency |
+
+---
+
 ### Interactive Model Leaderboard Dashboard
 
 Visualize model performance rankings with an interactive Streamlit dashboard.
@@ -416,10 +488,12 @@ openenv/
 │   ├── models.py                   # Pydantic typed models
 │   ├── rules.py                    # Rule engine — R1 through R10
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
-│   └── tasks.py                    # 6 task definitions with ground-truth violations
+│   └── tasks.py                    # 7 task definitions with ground-truth violations
 ├── tests/
 │   └── test_environment.py         # 46-test pytest suite
 ├── inference.py                    # Baseline LLM inference script
+├── train_grpo.py                   # GRPO training (Unsloth + TRL environment_factory)
+├── train_grpo_colab.py             # Colab-friendly version with cell markers
 ├── openenv.yaml                    # OpenEnv metadata (v1.0.0)
 ├── pyproject.toml
 ├── Dockerfile
