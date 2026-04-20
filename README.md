@@ -25,6 +25,21 @@ tags:
 
 ---
 
+## Hackathon Theme Alignment
+
+Auditrix was designed as a powerhouse solver for two major hackathon themes:
+
+**1. Theme #2: Long-Horizon Planning (Scale AI Bonus - HR & IT Workflows)**
+- Our environment explicitly tackles the **Scale AI Bonus** by providing a long-horizon, multi-step workflow in a business/HR setting (Employee Records, Salaries, Timesheets, Background Checks).
+- The agent must orchestrate dozens of interactions (up to 80 steps), track state over extended trajectories, and deal with highly delayed rewards (the terminal score at the exact end of an audit).
+
+**2. Theme #3.1: World Modeling (Professional Tasks)**
+- Directly tests an agent's ability to orchestrate tool-based professional workflows without exploiting shortcuts. 
+- Features a highly complex **Anti-Exploit Engine** that catches and penalizes recursive loops or hallucinated spam actions, forcing genuine reasoning.
+- Explores world model belief updates through a **Dynamic Event Engine** that injects system outages and policy changes mid-simulation.
+
+---
+
 ## Overview
 
 The **Compliance Audit Environment** simulates the real-world process of an HR or regulatory compliance officer auditing employee records against a set of policy rules. An AI agent must:
@@ -387,6 +402,16 @@ The training uses TRL's `environment_factory` pattern — each Auditrix action (
 └─────────────────────────────────────────────────────┘
 ```
 
+```mermaid
+graph TD
+    A["GRPOTrainer"] -->|"generates completions"| B["Model (Qwen2.5-3B + LoRA)"]
+    B -->|"tool calls"| C["AuditrixToolEnv"]
+    C -->|"inspect / apply / flag / mark / report"| D["ComplianceAuditEnv"]
+    D -->|"observation + reward"| C
+    C -->|"task_score"| E["audit_reward_func"]
+    E -->|"group-relative advantages"| A
+```
+
 **Quick start:**
 
 ```bash
@@ -403,7 +428,7 @@ python train_grpo.py --no-unsloth
 **Colab notebook:**
 
 ```bash
-# Run train_grpo_colab.py with # %% cell markers or convert to .ipynb
+# Open Auditrix_GRPO_Training.ipynb in Google Colab (recommend T4/L4 GPU).
 # Includes: install cells, baseline measurement, training, evaluation
 ```
 

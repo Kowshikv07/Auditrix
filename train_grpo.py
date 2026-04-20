@@ -1,9 +1,13 @@
 """Auditrix GRPO Training Script — Compliance Audit RL with Unsloth + TRL.
 
 Train a small language model to perform compliance audits using Group Relative
-Policy Optimization (GRPO).  The model interacts with the Auditrix environment
+Policy Optimization (GRPO). The model interacts with the Auditrix environment
 via TRL's `environment_factory` — each action (inspect, apply_rule, flag, …) is
 exposed as a callable tool that the model learns to invoke correctly.
+
+🏆 OpenEnv Hackathon Submission 
+  Theme #2: Long-Horizon Planning (Scale AI Bonus - HR Workflows)
+  Theme #3.1: World Modeling (Professional Tasks)
 
 Usage
 -----
