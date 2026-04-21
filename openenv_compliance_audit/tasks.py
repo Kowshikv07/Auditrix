@@ -12,6 +12,12 @@ Five tasks across three difficulty levels:
   gdpr_privacy_audit — 10 data-team records, rules R5/R8/R9 (GDPR-style)
                        Expired contracts, missing training, and PII data access
                        without recorded consent. Difficulty: medium.
+  streaming_long_horizon — 350 records, all 10 rules (R1-R10), 400 steps. Sparse rewards
+                       (zero per-step feedback, terminal reward only). Agent must strategically
+                       prioritize rules and sample records to achieve 30%+ coverage within
+                       budget. Tests long-horizon planning, multi-step decision-making, and
+                       session memory. Record amendments mid-episode test delayed rewards.
+                       Difficulty: streaming (hardest).
 """
 from __future__ import annotations
 
@@ -33,7 +39,7 @@ class RecordTruth:
 class TaskDefinition:
     task_id: str
     title: str
-    difficulty: Literal["easy", "medium", "hard", "extreme"]
+    difficulty: Literal["easy", "medium", "hard", "extreme", "streaming"]
     objective: str
     max_steps: int
     active_rule_ids: List[str]
@@ -1085,6 +1091,114 @@ _REGULATORY_STORM_RECORDS: List[RecordTruth] = [
 # Also flag duplicate IDs for RS020/RS022 (id=20) and RS008/RS012/RS016 (id=12)
 # and RS005/RS006 (id=5) — the R4 expected_violations above already include these.
 
+def _build_streaming_records() -> List[RecordTruth]:
+    records = []
+    for i in range(350):
+        record_id = f"S{i:03d}"
+        emp_id = i + 1
+        roles = ["employee", "intern", "manager", "accountant", "director", "analyst"]
+        role = roles[i % len(roles)]
+        age = 18 + (i % 42)
+        if i % 13 == 0:
+            age = 16 + (i % 2)
+        hours = 40
+        if i % 9 == 0:
+            hours = 48 + (i % 8)
+        elif i % 7 == 0:
+            hours = 20 + (i % 10)
+        role_base = {
+            "employee": 35000,
+            "intern": 22000,
+            "manager": 80000,
+            "accountant": 48000,
+            "director": 120000,
+            "analyst": 60000,
+        }
+        base_salary = role_base.get(role, 40000)
+        salary = base_salary + (i % 20) * 1000 - 10000
+        contract_end = "2026-12-31"
+        if i % 14 == 0:
+            contract_end = "2023-06-01"
+        background_check = i % 11 != 0
+        compliance_training = i % 8 != 0
+        pii_access = i % 10 == 0
+        gdpr_consent = pii_access and (i % 2 == 0)
+        violations = []
+        
+        # R1: age < 18 and hours > 8
+        if age < 18 and hours > 8:
+            violations.append("R1")
+        
+        # R2: role == "intern" and hours > 40
+        if role == "intern" and hours > 40:
+            violations.append("R2")
+        
+        # R3: salary outside role band
+        if role in role_base:
+            min_sal = role_base[role] * 0.85
+            max_sal = role_base[role] * 1.15
+            if salary < min_sal or salary > max_sal:
+                violations.append("R3")
+        
+        # R4: duplicate ID (every 23rd and every (23+157)th record share ID)
+        if emp_id % 23 == 0:
+            violations.append("R4")
+        
+        # R5: active employee with expired contract
+        if contract_end < "2025-01-01":
+            violations.append("R5")
+        
+        # R6: accountant/manager/director without background check
+        if role in ["accountant", "manager", "director"] and not background_check:
+            violations.append("R6")
+        
+        # R7: hours > 48 without explicit approval
+        if hours > 48:
+            violations.append("R7")
+        
+        # R8: active employee without compliance training
+        if not compliance_training:
+            violations.append("R8")
+        
+        # R9: PII access without GDPR consent
+        if pii_access and not gdpr_consent:
+            violations.append("R9")
+        
+        # R10: record with required field missing (rare ~2%)
+        if i % 50 == 0:
+            violations.append("R10")
+        
+        fields = {
+            "id": emp_id,
+            "name": f"Employee {record_id}",
+            "age": age,
+            "role": role,
+            "hours": hours,
+            "salary": salary,
+            "status": "active",
+            "contract_end": contract_end,
+            "background_check": background_check,
+            "compliance_training": compliance_training,
+            "pii_access": pii_access,
+            "gdpr_consent": gdpr_consent,
+        }
+
+        if i % 50 == 0:
+            omit_field = ["role", "hours", "salary", "age"][i % 4]
+            del fields[omit_field]
+        
+        records.append(
+            RecordTruth(
+                record_id=record_id,
+                fields=fields,
+                expected_violations=violations,
+            )
+        )
+    
+    return records
+
+_STREAMING_RECORDS: List[RecordTruth] = _build_streaming_records()
+
 
 # ---------------------------------------------------------------------------
 # Task registry
@@ -1203,8 +1317,23 @@ TASKS: Dict[str, TaskDefinition] = {
         active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"],
         records=_REGULATORY_STORM_RECORDS,
     ),
+    "streaming_long_horizon": TaskDefinition(
+        task_id="streaming_long_horizon",
+        title="Streaming Long-Horizon Multi-Rule Priority Audit",
+        difficulty="streaming",
+        objective=(
+            "Audit 350 employee records against all 10 compliance rules with strategic rule "
+            "prioritization. Agent must call prioritize_rules(rule_order=[...]) to decide audit "
+            "strategy. Achieve 30%+ coverage (105 records) within 400 steps. Sparse rewards: zero "
+            "per-step feedback. Terminal reward on report submission based on detection rate, "
+            "false positive rate, and coverage. Test long-horizon planning with record amendment "
+            "events and strategic decision-making under budget constraints."
+        ),
+        max_steps=400,
+        active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"],
+        records=_STREAMING_RECORDS,
+    ),
 }
-
 
 def list_task_ids() -> List[str]:
     return list(TASKS.keys())

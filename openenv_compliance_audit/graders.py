@@ -75,7 +75,7 @@ def _classify_failure_mode(
 
 
 class BaseAuditGrader:
-    """Compute a normalised [0, 1] score from the terminal episode state."""
+    """Compute a normalized [0, 1] score from the terminal episode state."""
 
     # Weights: (correct_violations, false_positive, coverage, efficiency)
     WEIGHTS: Tuple[float, float, float, float] = (0.5, 0.2, 0.2, 0.1)
@@ -297,6 +297,120 @@ class ExtremeAuditGrader(BaseAuditGrader):
             failure_mode=failure_mode,
         )
 
+class StreamingAuditGrader(BaseAuditGrader):
+    """Streaming — long-horizon sparse reward environment.
+
+    Grader formula adjustments:
+      - Detection rate weight prioritised (agent must find violations with sparse feedback)
+      - False-positive penalty less harsh than extreme (cap at 0.60 instead of 0.50)
+        because sparse rewards make it harder to avoid false positives
+      - Coverage floor at 30% (more lenient than extreme's 40%)
+      - Loop deduction scales moderately (0.025 per penalty)
+      - Sparse reward: RECORD_AMENDMENT events mid-episode remove violations from
+        true_violations set. Agent is not penalized for missing a violation that was
+        resolved by a corrective amendment.
+
+    Threshold checks:
+      - score <= 0.60 if false_positive_rate > 0.15 (FP precision matters but not absolute)
+      - score <= 0.25 if coverage < 0.30 (< 30% inspected → very low score)
+
+    Purpose: Reward strategic planning and sampling in a 1000-record, 300-step budget
+    where the agent must decide which records and rules to prioritize. Delayed rewards
+    via RECORD_AMENDMENT events test multi-step planning.
+    """
+
+    WEIGHTS = (0.55, 0.25, 0.15, 0.05)
+
+    def grade(self, state: AuditState) -> GradingBreakdown:
+        w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
+
+        amended_resolutions: Set[Tuple[str, str]] = set()
+        for event in state.event_schedule:
+            if event.fired and event.event_type.value == "record_amendment":
+                rec_id = event.record_id
+                field = event.payload.get("field")
+                new_value = event.payload.get("new_value")
+                if rec_id and field and rec_id in state.records:
+                    rec = state.records[rec_id]
+                    for rule_id in state.active_rule_ids:
+                        if rule_id in rec.expected_violations:
+                            if new_value is not None and new_value is not False:
+                                amended_resolutions.add((rec_id, rule_id))
+        true_violations: Set[Tuple[str, str]] = set()
+        for rec in state.records.values():
+            for rule_id in rec.expected_violations:
+                pair = (rec.record_id, rule_id)
+                if pair not in amended_resolutions:
+                    true_violations.add(pair)
+
+        total_violations = len(true_violations)
+
+        flagged: Set[Tuple[str, str]] = set()
+        for rec in state.records.values():
+            for rule_id in rec.flagged_violations:
+                pair = (rec.record_id, rule_id)
+                if pair not in amended_resolutions:
+                    flagged.add(pair)
+
+        correct_detected = len(flagged & true_violations)
+        false_positives = len(flagged - true_violations)
+        total_flagged = len(flagged)
+
+        detection_rate = (
+            correct_detected / total_violations if total_violations > 0 else 1.0
+        )
+        false_positive_rate = (
+            false_positives / total_flagged if total_flagged > 0 else 0.0
+        )
+        records_checked = sum(1 for r in state.records.values() if r.inspected)
+        total_records = len(state.records) or 1
+        coverage = records_checked / total_records
+
+        efficiency = max(
+            0.0, 1.0 - (state.step_count / state.max_steps)
+        ) if state.max_steps > 0 else 0.0
+
+        loop_deduction = min(0.10, state.loop_penalty_applied * 0.025)
+
+        score = (
+            w_viol * detection_rate
+            + w_fp   * (1.0 - false_positive_rate)
+            + w_cov  * coverage
+            + w_eff  * efficiency
+            - loop_deduction
+        )
+
+        if false_positive_rate > 0.15:
+            score = min(score, 0.60)
+
+        if coverage < 0.30:
+            score = min(score, 0.25)
+
+        if coverage < 0.50:
+            score = min(score, 0.50)
+
+        failure_mode = _classify_failure_mode(
+            state, detection_rate, false_positive_rate, coverage, efficiency
+        )
+
+        components = {
+            "detection_rate":      round(detection_rate, 4),
+            "false_positive_rate": round(false_positive_rate, 4),
+            "coverage":            round(coverage, 4),
+            "efficiency":          round(efficiency, 4),
+            "correct_detected":    correct_detected,
+            "total_violations":    total_violations,
+            "false_positives":     false_positives,
+            "records_checked":     records_checked,
+            "total_records":       total_records,
+            "loop_deduction":      round(loop_deduction, 4),
+            "amended_resolutions": len(amended_resolutions),
+        }
+        return GradingBreakdown(
+            score=max(0.0, min(1.0, score)),
+            components=components,
+            failure_mode=failure_mode,
+        )
 
 def grader_for_difficulty(difficulty: str) -> BaseAuditGrader:
     if difficulty == "easy":
@@ -307,4 +421,6 @@ def grader_for_difficulty(difficulty: str) -> BaseAuditGrader:
         return HardAuditGrader()
     if difficulty == "extreme":
         return ExtremeAuditGrader()
+    if difficulty == "streaming":
+        return StreamingAuditGrader()
     raise ValueError(f"Unknown difficulty: {difficulty!r}")

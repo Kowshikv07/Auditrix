@@ -11,6 +11,7 @@ class ActionType(str, Enum):
     APPLY_RULE = "apply_rule"
     FLAG_VIOLATION = "flag_violation"
     MARK_COMPLIANT = "mark_compliant"
+    PRIORITIZE_RULES = "prioritize_rules"
     GENERATE_REPORT = "generate_report"
     FINISH = "finish"
 
@@ -21,6 +22,10 @@ class AuditAction(BaseModel):
     action_type: ActionType = Field(description="The action to perform")
     record_id: Optional[str] = Field(default=None, description="Target record ID")
     rule_id: Optional[str] = Field(default=None, description="Rule to apply or flag")
+    rule_priority_order: Optional[List[str]] = Field(
+        default=None,
+        description="Rule IDs in priority order for prioritize_rules action (enables multi-step planning)",
+    )
     report: Optional[Dict[str, Any]] = Field(
         default=None,
         description=(
@@ -174,6 +179,16 @@ class AuditObservation(BaseModel):
         default_factory=dict,
         description="Active rule-threshold overrides from POLICY_UPDATE events",
     )
+    # Rule prioritization for multi-step planning in streaming tasks
+    rule_priority_order: List[str] = Field(
+        default_factory=list,
+        description="Agent's strategic prioritization of rules to audit first",
+    )
+    # Loop exploit action signature (for agent observability)
+    loop_exploit_signature: Optional[str] = Field(
+        default=None,
+        description="Action signature (action_type:record_id) that triggered the loop exploit detection",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +234,7 @@ class AuditState(BaseModel):
     task_id: str
     task_title: str
     objective: str
-    difficulty: Literal["easy", "medium", "hard", "extreme"]
+    difficulty: Literal["easy", "medium", "hard", "extreme", "streaming"]
     active_rule_ids: List[str]
     step_count: int = 0
     max_steps: int
@@ -247,6 +262,21 @@ class AuditState(BaseModel):
     loop_penalty_applied: int = Field(
         default=0,
         description="Number of loop penalties applied this episode",
+    )
+    # Multi-step planning state
+    rule_priority_order: List[str] = Field(
+        default_factory=list,
+        description="Agent-specified rule priority order for strategic audit planning",
+    )
+    rule_priority_set: bool = Field(
+        default=False, description="Whether agent has called prioritize_rules"
+    )
+    reward_history: List[float] = Field(
+        default_factory=list, description="All rewards given this episode"
+    )
+    loop_exploit_signature: Optional[str] = Field(
+        default=None,
+        description="Action signature (action_type:record_id) that triggered loop exploit detection",
     )
 
 
