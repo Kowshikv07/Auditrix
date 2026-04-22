@@ -6,13 +6,21 @@ description: >
   inspects structured organisational records, applies configurable compliance
   rules, flags violations, and produces a final audit report.
 
-  Six tasks span three difficulty levels:
-    • easy_basic_audit      — 5 records,  2 rules (R1, R2): minor/intern overhours
-    • medium_mixed_audit    — 12 records, 4 rules (R1-R4): salary, duplicate IDs
-    • hard_complex_audit    — 20 records, 5 rules (R1-R5): expired contracts, edge cases
-    • finance_sox_audit     — 15 records, 4 rules (R3, R6, R7, R8): SOX pre-certification
-    • gdpr_privacy_audit    — 10 records, 3 rules (R5, R8, R9): GDPR data-privacy
-    • data_integrity_audit  —  8 records, 3 rules (R3, R4, R10): missing fields + dup IDs
+  Eight tasks spanning five difficulty levels — including long-horizon sparse-reward
+  and extreme stress-test scenarios designed for Theme #2 (Long-Horizon Planning)
+  and Theme #3.1 (World Modeling / Professional Tasks):
+    • easy_basic_audit         — 5 records,   2 rules (R1, R2): minor/intern overhours
+    • medium_mixed_audit       — 12 records,  4 rules (R1-R4): salary, duplicate IDs
+    • hard_complex_audit       — 20 records,  5 rules (R1-R5): expired contracts, edge cases
+    • finance_sox_audit        — 15 records,  4 rules (R3, R6, R7, R8): SOX pre-certification
+    • gdpr_privacy_audit       — 10 records,  3 rules (R5, R8, R9): GDPR data-privacy
+    • data_integrity_audit     —  8 records,  3 rules (R3, R4, R10): missing fields + dup IDs
+    • regulatory_storm_audit   — 25 records, 10 rules (R1-R10): extreme multi-domain stress-test
+                                  with dynamic POLICY_UPDATE, SYSTEM_OUTAGE, RECORD_AMENDMENT events
+    • streaming_long_horizon   — 350 records, 10 rules (R1-R10), 400 steps, sparse rewards.
+                                  Agent must call prioritize_rules() then strategically sample
+                                  records to hit ≥30% coverage under strict step budget.
+                                  Zero per-step feedback — terminal reward only.
 
   Ten rules across five compliance domains:
     Employment (R1, R2, R7): minor protection, intern caps, overtime law
@@ -33,6 +41,10 @@ tags:
   - gdpr
   - deterministic-evaluation
   - real-world
+  - long-horizon
+  - sparse-rewards
+  - scale-ai-bonus
+  - mercor-bonus
 
 entrypoint:
   module: openenv_compliance_audit.server
@@ -98,7 +110,35 @@ tasks:
       6 violation pairs; key challenge: a record missing salary skips R3
       gracefully but still triggers R10 (null-safe rule evaluation).
 
+  - id: regulatory_storm_audit
+    difficulty: extreme
+    title: "Regulatory Storm: Multi-Domain Stress-Test Audit"
+    objective: >
+      Extreme stress-test across 25 records covering all 10 rules (R1-R10).
+      Three simultaneous duplicate-ID groups; overlapping GDPR + overtime
+      violations; mid-episode dynamic events: POLICY_UPDATE (overtime threshold
+      48→40), two SYSTEM_OUTAGEs, two RECORD_AMENDMENTs.
+      Static memorisation of rules fails — correct answers depend on the
+      seed-dependent event schedule. Score ≥0.50 requires zero false positives
+      and ≥50% detection; score 1.0 requires full detection + efficient coverage.
+
+  - id: streaming_long_horizon
+    difficulty: streaming
+    title: Streaming Long-Horizon Multi-Rule Priority Audit
+    objective: >
+      Long-horizon sparse-reward audit of 350 employee records against all 10
+      rules (R1-R10) within a 400-step budget.
+      The agent MUST call prioritize_rules(rule_order=[...]) before auditing
+      to commit to a rule-priority strategy — this action is free but mandatory
+      for achieving high scores.
+      Zero per-step reward; terminal reward on generate_report only.
+      Target: ≥30% record coverage (105/350) with high detection rate and
+      zero false positives. Tests long-horizon planning, strategic sampling,
+      and recovery from delayed reward signals.
+
 huggingface:
   sdk: docker
   tags:
     - openenv
+    - long-horizon
+    - sparse-rewards

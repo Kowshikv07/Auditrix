@@ -169,13 +169,17 @@ class ComplianceAuditEnv:
                 reward_value -= _LOOP_PENALTY
                 loop_penalty_applied = True
                 self._state.loop_penalty_applied += 1
+                self._state.loop_exploit_signature = sig
                 # Clear window to avoid repeated penalisation of the same burst
                 self._state.recent_action_window.clear()
 
         if not loop_penalty_applied:
             try:
                 step_reward, reward_components = self._dispatch(action)
+                # Streaming reward shaping is handled per-action inside _dispatch().
+                # No blanket zero-out here — each action returns the correct value.
                 reward_value += step_reward
+                self._state.reward_history.append(step_reward)
             except ValueError as exc:
                 self._state.last_action_error = str(exc)
                 reward_components["invalid_action"] = 0.0
@@ -282,6 +286,23 @@ class ComplianceAuditEnv:
         components: Dict[str, float] = {}
         self._state.last_decision_trace = None
 
+        # ── prioritize_rules (multi-step planning) ────────────────────
+        if action.action_type == ActionType.PRIORITIZE_RULES:
+            if not action.rule_priority_order:
+                raise ValueError("rule_priority_order is required for prioritize_rules action.")
+            # Validate that all active rules are present in the priority order
+            provided_rules = set(action.rule_priority_order)
+            active_rules = set(self._state.active_rule_ids)
+            if provided_rules != active_rules:
+                raise ValueError(
+                    f"rule_priority_order must contain exactly the active rules. "
+                    f"Expected: {sorted(active_rules)}, got: {sorted(provided_rules)}"
+                )
+            self._state.rule_priority_order = list(action.rule_priority_order)
+            self._state.rule_priority_set = True
+            components["rule_priority_set"] = 0.0
+            return 0.0, components
+
         # ── generate_report / finish ──────────────────────────────────
         if action.action_type in (ActionType.GENERATE_REPORT, ActionType.FINISH):
             components["pre_terminal"] = 0.0
@@ -309,8 +330,12 @@ class ComplianceAuditEnv:
                 components["inspect_repeat"] = -0.02
                 return -0.02, components
             record.inspected = True
-            components["inspect_new"] = 0.06
-            return 0.06, components
+            # Streaming: tiny shaped reward to encourage record exploration.
+            # Small enough to keep long-horizon sparse character; large enough
+            # to give untrained models a signal to keep moving forward.
+            inspect_reward = 0.01 if self._state.difficulty == "streaming" else 0.06
+            components["inspect_new"] = inspect_reward
+            return inspect_reward, components
 
         # Guard: record must be inspected before audit actions
         if not record.inspected:
@@ -354,8 +379,11 @@ class ComplianceAuditEnv:
             )
 
             if is_violation:
-                components["rule_hit"] = 0.20
-                return 0.20, components
+                # apply_rule stays fully sparse in streaming — the model
+                # must flag to get any meaningful signal.
+                rule_reward = 0.0 if self._state.difficulty == "streaming" else 0.20
+                components["rule_hit"] = rule_reward
+                return rule_reward, components
             components["rule_no_hit"] = 0.0
             return 0.0, components
 
@@ -397,12 +425,16 @@ class ComplianceAuditEnv:
             )
 
             if is_true_violation:
-                components["flag_correct"] = 0.50
-                return 0.50, components
-            # False positive
+                # Streaming: modest positive signal so model learns flagging is
+                # the goal — much less than other tasks to keep sparse character.
+                flag_reward = 0.05 if self._state.difficulty == "streaming" else 0.50
+                components["flag_correct"] = flag_reward
+                return flag_reward, components
             self._state.penalties += 0.15
-            components["flag_false_positive"] = -0.30
-            return -0.30, components
+            # Streaming: negative signal on FP so model learns not to guess.
+            fp_reward = -0.10 if self._state.difficulty == "streaming" else -0.30
+            components["flag_false_positive"] = fp_reward
+            return fp_reward, components
 
         # ── mark_compliant ────────────────────────────────────────────
         if action.action_type == ActionType.MARK_COMPLIANT:
@@ -413,9 +445,10 @@ class ComplianceAuditEnv:
             record.marked_compliant = True
             has_real_violations = bool(record.expected_violations)
             if not has_real_violations:
-                components["compliant_correct"] = 0.05
-                return 0.05, components
-            # Agent missed violations
+                # mark_compliant stays sparse in streaming.
+                compliant_reward = 0.0 if self._state.difficulty == "streaming" else 0.05
+                components["compliant_correct"] = compliant_reward
+                return compliant_reward, components
             self._state.penalties += 0.10
             components["compliant_wrong"] = -0.10
             return -0.10, components
@@ -490,6 +523,8 @@ class ComplianceAuditEnv:
             last_decision_trace=self._state.last_decision_trace,
             active_events=fired_events,
             current_policy_overrides=dict(self._state.policy_overrides),
+            rule_priority_order=list(self._state.rule_priority_order),
+            loop_exploit_signature=self._state.loop_exploit_signature,
         )
 
     # ------------------------------------------------------------------

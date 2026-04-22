@@ -65,11 +65,15 @@ AVAILABLE ACTIONS
   apply_rule       — run a compliance rule against an inspected record (+0.2 if violation found)
   flag_violation   — officially flag a (record, rule) pair as a violation (+0.5 correct / -0.3 wrong)
   mark_compliant   — declare a record has no violations (+0.05 if truly compliant)
+  prioritize_rules — [STREAMING TASK ONLY] declare your rule priority strategy BEFORE auditing.
+                     This is FREE (zero step cost). Provide rule_priority_order as a list of all
+                     active rule IDs in the order you want to audit them. Do this FIRST.
   generate_report  — submit the final audit report (ends episode, best terminal bonus)
   finish           — end the episode without a report (lower terminal reward)
 
 JSON schema:
   {"action_type": "<value>", "record_id": "<id or null>", "rule_id": "<id or null>"}
+  For prioritize_rules: {"action_type": "prioritize_rules", "rule_priority_order": ["R8", "R3", ...]}
 
 ──────────────────────────────────────────────────────────
 COMPLIANCE RULES REFERENCE
