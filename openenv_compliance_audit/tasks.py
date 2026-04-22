@@ -1095,98 +1095,148 @@ def _build_streaming_records() -> List[RecordTruth]:
     records = []
     for i in range(350):
         record_id = f"S{i:03d}"
-        emp_id = i + 1
+
         roles = ["employee", "intern", "manager", "accountant", "director", "analyst"]
         role = roles[i % len(roles)]
+
         age = 18 + (i % 42)
         if i % 13 == 0:
             age = 16 + (i % 2)
+
         hours = 40
         if i % 9 == 0:
             hours = 48 + (i % 8)
         elif i % 7 == 0:
             hours = 20 + (i % 10)
-        role_base = {
-            "employee": 35000,
-            "intern": 22000,
-            "manager": 80000,
-            "accountant": 48000,
-            "director": 120000,
-            "analyst": 60000,
+
+        # salary built around ROLE_SALARY_RANGES midpoints
+        # so R3 ground-truth exactly matches SalaryRangeRule.evaluate()
+        from openenv_compliance_audit.rules import ROLE_SALARY_RANGES as _RSR, BACKGROUND_CHECK_ROLES as _BCR
+        _band = _RSR.get(role)      # (lo, hi) or None
+        _role_mid = {
+            "employee":   55_000,
+            "intern":     25_000,
+            "manager":    90_000,
+            "accountant": 65_000,
+            "director":  135_000,
+            "analyst":    55_000,
         }
-        base_salary = role_base.get(role, 40000)
-        salary = base_salary + (i % 20) * 1000 - 10000
+        base_salary = _role_mid[role]
+        # i%30 cycle: 0-9 → normal ±10 000; 10-14 → below band min; 15-19 → above band max
+        oc = i % 30
+        if oc < 10:
+            salary = base_salary + (oc - 5) * 2_000
+        elif oc < 15:
+            salary = (_band[0] - (oc - 9) * 3_000) if _band else (base_salary - 10_000)
+        else:
+            salary = ((_band[1] if _band else base_salary) + (oc - 14) * 2_000)
+
+        # real duplicate IDs so R4 can actually fire 
+        # 8 sentinel IDs (9992-9999) each shared by exactly 2 records
+        _DUP_PAIRS: Dict[int, int] = {
+            22: 9999,   44: 9999,
+            67: 9998,   89: 9998,
+            112: 9997, 134: 9997,
+            157: 9996, 179: 9996,
+            202: 9995, 224: 9995,
+            247: 9994, 269: 9994,
+            292: 9993, 314: 9993,
+            337: 9992, 349: 9992,
+        }
+        emp_id: int = _DUP_PAIRS.get(i, i + 1)
+
         contract_end = "2026-12-31"
         if i % 14 == 0:
-            contract_end = "2023-06-01"
+            contract_end = "2023-06-01"         # expired (< AUDIT_REFERENCE_DATE 2024-01-01)
+
         background_check = i % 11 != 0
         compliance_training = i % 8 != 0
-        pii_access = i % 10 == 0
-        gdpr_consent = pii_access and (i % 2 == 0)
-        violations = []
-        
+        overtime_approved = i % 5 != 0         # explicit field; ~20 % unapproved
+
+        # R9 consent pattern fixed — gdpr_consent independent of pii_access
+        # Old bug: pii_access=i%10==0 AND gdpr_consent = pii_access AND (i%2==0)
+        # Since i%10==0 ⟹ i%2==0 always, gdpr_consent always equalled pii_access → R9 never fired.
+        pii_access    = (i % 10 == 0) or (i % 17 == 0)   # ~8 % of records
+        gdpr_consent  = pii_access and (i % 3 != 0)       # ~33 % of PII records lack consent
+
+        # Realistic name pool (cycles through 35 × 35 combinations)
+        _FIRST = ["Ada","Ben","Clara","David","Elise","Frank","Grace","Henry","Iris","Jordan",
+                  "Karen","Liam","Maya","Noah","Omar","Petra","Quinn","Rachel","Samuel","Tara",
+                  "Uma","Victor","Wendy","Xavier","Yuki","Zoe","Alex","Blake","Casey","Drew",
+                  "Emery","Finley","Gray","Harper","Indira"]
+        _LAST  = ["Lewis","Nakamura","Reich","Okonkwo","Ramos","Torres","Patel","Bassett",
+                  "Ferreira","Almeida","Wu","Osei","Singh","Kovac","Diaz","Novak","Huang",
+                  "Musa","Ito","Obi","Larsson","Chen","Park","Holm","Brennan","Brown",
+                  "Jones","Smith","Muller","Dupont","Li","Martin","Garcia","Wilson","Johnson"]
+        name = f"{_FIRST[i % len(_FIRST)]} {_LAST[i % len(_LAST)]}"
+
+        violations: List[str] = []
+
+        # Pre-compute R10 omit_field first so R3/R6 can skip when relevant field is missing
+        _omit_field: Optional[str] = None
+        if i % 50 == 0:
+            _omit_field = ["role", "hours", "salary", "name"][i % 4]
+            violations.append("R10")
+
         # R1: age < 18 and hours > 8
         if age < 18 and hours > 8:
             violations.append("R1")
-        
+
         # R2: role == "intern" and hours > 40
         if role == "intern" and hours > 40:
             violations.append("R2")
-        
-        # R3: salary outside role band
-        if role in role_base:
-            min_sal = role_base[role] * 0.85
-            max_sal = role_base[role] * 1.15
-            if salary < min_sal or salary > max_sal:
-                violations.append("R3")
-        
-        # R4: duplicate ID (every 23rd and every (23+157)th record share ID)
-        if emp_id % 23 == 0:
+
+        # R3: salary outside ROLE_SALARY_RANGES.
+        # Skip when role or salary field will be omitted (SalaryRangeRule is null-safe).
+        if _omit_field not in ("role", "salary") and _band is not None and not (_band[0] <= salary <= _band[1]):
+            violations.append("R3")
+
+        # R4: duplicate emp_id — only for positions in _DUP_PAIRS
+        if i in _DUP_PAIRS:
             violations.append("R4")
-        
-        # R5: active employee with expired contract
-        if contract_end < "2025-01-01":
+
+        # R5: active + expired contract (AUDIT_REFERENCE_DATE = "2024-01-01")
+        if contract_end < "2024-01-01":
             violations.append("R5")
-        
-        # R6: accountant/manager/director without background check
-        if role in ["accountant", "manager", "director"] and not background_check:
+
+        # R6: sensitive role without background_check (mirrors BACKGROUND_CHECK_ROLES).
+        # Skip when role field will be omitted.
+        if _omit_field != "role" and role in _BCR and not background_check:
             violations.append("R6")
-        
-        # R7: hours > 48 without explicit approval
-        if hours > 48:
+
+        # R7: hours > 48 (strict >) and overtime_approved != True
+        if hours > 48 and not overtime_approved:
             violations.append("R7")
-        
-        # R8: active employee without compliance training
+
+        # R8: status == "active" and compliance_training != True
         if not compliance_training:
             violations.append("R8")
-        
-        # R9: PII access without GDPR consent
+
+        # R9: pii_access == True and gdpr_consent != True
         if pii_access and not gdpr_consent:
             violations.append("R9")
-        
-        # R10: record with required field missing (rare ~2%)
-        if i % 50 == 0:
-            violations.append("R10")
-        
-        fields = {
-            "id": emp_id,
-            "name": f"Employee {record_id}",
-            "age": age,
-            "role": role,
-            "hours": hours,
-            "salary": salary,
-            "status": "active",
-            "contract_end": contract_end,
-            "background_check": background_check,
+
+
+
+        fields: Dict[str, Any] = {
+            "id":                  emp_id,
+            "name":                name,
+            "age":                 age,
+            "role":                role,
+            "hours":               hours,
+            "salary":              salary,
+            "status":              "active",
+            "contract_end":        contract_end,
+            "background_check":    background_check,
+            "overtime_approved":   overtime_approved,
             "compliance_training": compliance_training,
-            "pii_access": pii_access,
-            "gdpr_consent": gdpr_consent,
+            "pii_access":          pii_access,
+            "gdpr_consent":        gdpr_consent,
         }
 
-        if i % 50 == 0:
-            omit_field = ["role", "hours", "salary", "age"][i % 4]
-            del fields[omit_field]
-        
+        if _omit_field:
+            del fields[_omit_field]
+
         records.append(
             RecordTruth(
                 record_id=record_id,
@@ -1322,12 +1372,20 @@ TASKS: Dict[str, TaskDefinition] = {
         title="Streaming Long-Horizon Multi-Rule Priority Audit",
         difficulty="streaming",
         objective=(
-            "Audit 350 employee records against all 10 compliance rules with strategic rule "
-            "prioritization. Agent must call prioritize_rules(rule_order=[...]) to decide audit "
-            "strategy. Achieve 30%+ coverage (105 records) within 400 steps. Sparse rewards: zero "
-            "per-step feedback. Terminal reward on report submission based on detection rate, "
-            "false positive rate, and coverage. Test long-horizon planning with record amendment "
-            "events and strategic decision-making under budget constraints."
+            "Long-horizon sparse-reward audit of 350 employee records against all 10 active "
+            "rules (R1-R10) within a 400-step budget. You cannot inspect every record — strategic "
+            "prioritisation is mandatory. Start by calling prioritize_rules(rule_order=[...]) "
+            "with all 10 rule IDs ordered by expected yield; this is a free action (no step cost) "
+            "but must be called before auditing to avoid an efficiency penalty. "
+            "There are NO per-step rewards — every inspect/apply/flag returns 0.0; only "
+            "generate_report yields a terminal score, so never call finish. "
+            "Target ≥ 30% record coverage (105 / 350 inspected). "
+            "Scoring: 0.55xdetection_rate + 0.25x(1-FP_rate) + 0.15xcoverage + 0.05xefficiency; "
+            "hard caps: FP rate > 15% → score ≤ 0.60; coverage < 30% → score ≤ 0.25; "
+            "coverage < 50% → score ≤ 0.50. "
+            "Mid-episode RECORD_AMENDMENT events may resolve violations after inspection — "
+            "re-apply the relevant rule before flagging to avoid false positives. "
+            "There are 385 real violation pairs across 350 records spanning all 10 rules."
         ),
         max_steps=400,
         active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"],

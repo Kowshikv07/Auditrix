@@ -260,6 +260,67 @@ _TASK_EVENT_TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
             ),
         },
     ],
+    "streaming_long_horizon": [
+        # Step ~50: R8 resolved — training record backfilled for Iris Ferreira early in the sweep
+        {
+            "event_type": EventType.RECORD_AMENDMENT,
+            "record_id": "S008",
+            "trigger_step": 50,
+            "payload": {
+                "field": "compliance_training",
+                "old_value": False,
+                "new_value": True,
+                "note": "LMS backfill: training completion logged retroactively.",
+            },
+            "description": (
+                "RECORD AMENDMENT: S008 (Iris Ferreira) compliance_training updated to True. "
+                "R8 violation is now resolved — do NOT flag R8 on S008 after this step."
+            ),
+        },
+        # Step ~120: R9 resolved — GDPR consent form received for Henry Bassett
+        {
+            "event_type": EventType.RECORD_AMENDMENT,
+            "record_id": "S120",
+            "trigger_step": 120,
+            "payload": {
+                "field": "gdpr_consent",
+                "old_value": False,
+                "new_value": True,
+                "note": "GDPR consent form signed and filed by data subject.",
+            },
+            "description": (
+                "RECORD AMENDMENT: S120 gdpr_consent updated to True. "
+                "R9 violation is now resolved — do NOT flag R9 on S120 after this step."
+            ),
+        },
+        # Step ~230: SYSTEM_OUTAGE — legal hold on a record with multiple violations
+        {
+            "event_type": EventType.SYSTEM_OUTAGE,
+            "record_id": "S224",
+            "trigger_step": 230,
+            "payload": {"duration_steps": 20},
+            "description": (
+                "SYSTEM OUTAGE: S224 (Omar Diaz) placed under legal hold — "
+                "inaccessible for 20 steps. Continue auditing other records and retry after."
+            ),
+        },
+        # Step ~310: R5 resolved — contract renewal processed for Ada Lewis
+        {
+            "event_type": EventType.RECORD_AMENDMENT,
+            "record_id": "S280",
+            "trigger_step": 310,
+            "payload": {
+                "field": "contract_end",
+                "old_value": "2023-06-01",
+                "new_value": "2026-12-31",
+                "note": "Contract renewal backdated and approved by HR director.",
+            },
+            "description": (
+                "RECORD AMENDMENT: S280 (Ada Lewis) contract_end updated to 2026-12-31. "
+                "R5 violation is now resolved — do NOT flag R5 on S280 after this step."
+            ),
+        },
+    ],
 }
 
 # Default trigger steps (index in template list → step number)
@@ -289,11 +350,21 @@ class EventScheduler:
         self.seed = seed
 
     def build_schedule(self) -> List[EventEntry]:
-        """Return the deterministic event list for this (task_id, seed)."""
+        """Return the deterministic event list for this (task_id, seed).
+
+        If a template entry contains a "trigger_step" key it is used as the
+        base step directly (seed offset still applied on top).  This allows
+        long-horizon tasks like streaming_long_horizon to spread events across
+        hundreds of steps rather than being crowded into _BASE_TRIGGER_STEPS.
+        """
         templates = _TASK_EVENT_TEMPLATES.get(self.task_id, [])
         events: List[EventEntry] = []
         for idx, tmpl in enumerate(templates):
-            base_step = _BASE_TRIGGER_STEPS[idx] if idx < len(_BASE_TRIGGER_STEPS) else 15
+            if "trigger_step" in tmpl:
+                # Per-template override: use the explicit step, still jitter by seed
+                base_step = tmpl["trigger_step"]
+            else:
+                base_step = _BASE_TRIGGER_STEPS[idx] if idx < len(_BASE_TRIGGER_STEPS) else 15
             offset = _deterministic_offset(self.task_id, self.seed, idx)
             trigger_step = max(1, base_step + offset)
             events.append(
