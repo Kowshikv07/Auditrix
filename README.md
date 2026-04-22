@@ -596,7 +596,7 @@ openenv/
 ## OpenEnv Validation
 
 ```bash
-.venv/bin/openenv validate
+.venv/bin/openenv validate # or : ../.venv/bin/openenv validate
 ```
 
 ---
