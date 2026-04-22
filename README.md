@@ -391,7 +391,7 @@ curl -X POST http://localhost:7860/step \
   -d '{"action_type": "inspect_record", "record_id": "F001"}'
 
 # Run tests
-python -m pytest -q
+python3 -m pytest -q
 ```
 
 ### Docker
