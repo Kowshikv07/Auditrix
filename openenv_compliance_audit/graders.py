@@ -24,6 +24,7 @@ from dataclasses import dataclass
 from typing import Dict, Set, Tuple
 
 from .models import AuditState, FailureMode
+from .rules import RULES
 
 
 @dataclass(frozen=True)
@@ -80,15 +81,34 @@ class BaseAuditGrader:
     # Weights: (correct_violations, false_positive, coverage, efficiency)
     WEIGHTS: Tuple[float, float, float, float] = (0.5, 0.2, 0.2, 0.1)
 
+    def _live_true_violations(self, state: AuditState) -> Set[Tuple[str, str]]:
+        """Compute the ground-truth violation set by evaluating rules live.
+
+        Unlike the static `expected_violations` baked in at task creation,
+        this respects mid-episode changes:
+          - POLICY_UPDATE: lower overtime threshold creates new violations
+          - RECORD_AMENDMENT: corrected fields resolve old violations
+        """
+        all_fields = [r.fields for r in state.records.values()]
+        true_violations: Set[Tuple[str, str]] = set()
+        for rec in state.records.values():
+            for rule_id in state.active_rule_ids:
+                policy_override = state.policy_overrides.get(rule_id)
+                rule = RULES.get(rule_id)
+                if rule is None:
+                    continue
+                is_viol, _, _ = rule.evaluate_with_evidence(
+                    rec.fields, all_fields, policy_override
+                )
+                if is_viol:
+                    true_violations.add((rec.record_id, rule_id))
+        return true_violations
+
     def grade(self, state: AuditState) -> GradingBreakdown:
         w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
 
-        # ── ground truth ──────────────────────────────────────────────────
-        true_violations: Set[Tuple[str, str]] = set()
-        for rec in state.records.values():
-            for rule_id in rec.expected_violations:
-                true_violations.add((rec.record_id, rule_id))
-
+        # ── ground truth (live — respects POLICY_UPDATE & RECORD_AMENDMENT) ─
+        true_violations = self._live_true_violations(state)
         total_violations = len(true_violations)
 
         # ── agent declarations ─────────────────────────────────────────────
@@ -195,43 +215,14 @@ class ExtremeAuditGrader(BaseAuditGrader):
     def grade(self, state: AuditState) -> GradingBreakdown:
         w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
 
-        # Compute amendment-adjusted ground truth:
-        # If a RECORD_AMENDMENT resolved a violation (field changed mid-episode),
-        # remove it from true_violations so the agent isn't penalised for missing it.
-        amended_resolutions: Set[Tuple[str, str]] = set()
-        for event in state.event_schedule:
-            if event.fired and event.event_type.value == "record_amendment":
-                rec_id = event.record_id
-                field = event.payload.get("field")
-                new_value = event.payload.get("new_value")
-                # For each active rule, check if the amendment resolves the violation
-                if rec_id and field and rec_id in state.records:
-                    rec = state.records[rec_id]
-                    for rule_id in state.active_rule_ids:
-                        # If expected violation exists AND the new field value would make
-                        # the rule return False, mark as resolved
-                        if rule_id in rec.expected_violations:
-                            # We use a simple heuristic: if new_value is truthy / non-None,
-                            # the amendment likely resolved the violation
-                            if new_value is not None and new_value is not False:
-                                amended_resolutions.add((rec_id, rule_id))
-
-        true_violations: Set[Tuple[str, str]] = set()
-        for rec in state.records.values():
-            for rule_id in rec.expected_violations:
-                pair = (rec.record_id, rule_id)
-                if pair not in amended_resolutions:
-                    true_violations.add(pair)
-
+        # Live ground truth — correctly handles both POLICY_UPDATE and RECORD_AMENDMENT.
+        true_violations = self._live_true_violations(state)
         total_violations = len(true_violations)
 
         flagged: Set[Tuple[str, str]] = set()
         for rec in state.records.values():
             for rule_id in rec.flagged_violations:
-                pair = (rec.record_id, rule_id)
-                # Don't count amended-away violations as false positives
-                if pair not in amended_resolutions:
-                    flagged.add(pair)
+                flagged.add((rec.record_id, rule_id))
 
         correct_detected = len(flagged & true_violations)
         false_positives = len(flagged - true_violations)
@@ -289,7 +280,6 @@ class ExtremeAuditGrader(BaseAuditGrader):
             "records_checked":      records_checked,
             "total_records":        total_records,
             "loop_deduction":       round(loop_deduction, 4),
-            "amended_resolutions":  len(amended_resolutions),
         }
         return GradingBreakdown(
             score=max(0.0, min(1.0, score)),
@@ -324,33 +314,14 @@ class StreamingAuditGrader(BaseAuditGrader):
     def grade(self, state: AuditState) -> GradingBreakdown:
         w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
 
-        amended_resolutions: Set[Tuple[str, str]] = set()
-        for event in state.event_schedule:
-            if event.fired and event.event_type.value == "record_amendment":
-                rec_id = event.record_id
-                field = event.payload.get("field")
-                new_value = event.payload.get("new_value")
-                if rec_id and field and rec_id in state.records:
-                    rec = state.records[rec_id]
-                    for rule_id in state.active_rule_ids:
-                        if rule_id in rec.expected_violations:
-                            if new_value is not None and new_value is not False:
-                                amended_resolutions.add((rec_id, rule_id))
-        true_violations: Set[Tuple[str, str]] = set()
-        for rec in state.records.values():
-            for rule_id in rec.expected_violations:
-                pair = (rec.record_id, rule_id)
-                if pair not in amended_resolutions:
-                    true_violations.add(pair)
-
+        # Live ground truth — correctly handles both POLICY_UPDATE and RECORD_AMENDMENT.
+        true_violations = self._live_true_violations(state)
         total_violations = len(true_violations)
 
         flagged: Set[Tuple[str, str]] = set()
         for rec in state.records.values():
             for rule_id in rec.flagged_violations:
-                pair = (rec.record_id, rule_id)
-                if pair not in amended_resolutions:
-                    flagged.add(pair)
+                flagged.add((rec.record_id, rule_id))
 
         correct_detected = len(flagged & true_violations)
         false_positives = len(flagged - true_violations)
@@ -404,7 +375,6 @@ class StreamingAuditGrader(BaseAuditGrader):
             "records_checked":     records_checked,
             "total_records":       total_records,
             "loop_deduction":      round(loop_deduction, 4),
-            "amended_resolutions": len(amended_resolutions),
         }
         return GradingBreakdown(
             score=max(0.0, min(1.0, score)),

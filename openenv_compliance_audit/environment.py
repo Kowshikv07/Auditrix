@@ -398,20 +398,23 @@ class ComplianceAuditEnv:
                 components["flag_duplicate"] = -0.05
                 return -0.05, components
 
-            is_true_violation = action.rule_id in record.expected_violations
 
-            # Check if a RECORD_AMENDMENT has since resolved this violation
-            # (if the rule now evaluates to False after amendment, treat as false positive)
-            if is_true_violation:
-                rule = RULES[action.rule_id]
-                all_fields = [r.fields for r in self._state.records.values()]
-                policy_override = self._state.policy_overrides.get(action.rule_id)
-                current_eval, _, _ = rule.evaluate_with_evidence(
-                    record.fields, all_fields, policy_override
-                )
-                if not current_eval:
-                    # Amendment resolved the violation — flagging now is a false positive
-                    is_true_violation = False
+            # ── Live rule evaluation (source of truth) ────────────────────
+            # Evaluate the rule RIGHT NOW using current policy_overrides.
+            # This correctly handles two cases:
+            #   1. POLICY_UPDATE created a new violation (e.g. overtime 48→40):
+            #      The static expected_violations doesn't include this, but the
+            #      live evaluation returns True → agent is rewarded correctly.
+            #   2. RECORD_AMENDMENT resolved a violation:
+            #      The static expected_violations still lists it, but the live
+            #      evaluation returns False → flagging is now a false positive.
+            rule = RULES[action.rule_id]
+            all_fields = [r.fields for r in self._state.records.values()]
+            policy_override = self._state.policy_overrides.get(action.rule_id)
+            current_eval, _, _ = rule.evaluate_with_evidence(
+                record.fields, all_fields, policy_override
+            )
+            is_true_violation = current_eval
 
             record.flagged_violations.append(action.rule_id)
 
