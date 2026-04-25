@@ -4,6 +4,7 @@ Single-turn architecture: model sees all records upfront, outputs one JSON audit
 """
 from __future__ import annotations
 import json, os, re, torch, threading
+from html import escape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -18,15 +19,65 @@ PUSH_TO_HUB      = os.getenv("PUSH_TO_HUB", "0") == "1"
 HUB_REPO_ID      = os.getenv("HUB_REPO_ID", "")
 
 # ── Health-check server ───────────────────────────────────────────────────────
-_TRAIN_STATUS = {"step": 0, "total": GRPO_STEPS, "done": False}
+_TRAIN_STATUS = {
+    "step": 0,
+    "total": GRPO_STEPS,
+    "done": False,
+    "last_reward": 0.0,
+    "rows": [],
+}
+
+
+def _render_rows_table(rows: list[dict]) -> str:
+    if not rows:
+        return "<p>No training rows yet. Waiting for first reward log...</p>"
+
+    header = (
+        "<tr>"
+        "<th>#</th><th>Prompt</th><th>Completion</th><th>reward_from_env</th>"
+        "<th>reward_format</th><th>reward_coverage</th><th>Advantage</th>"
+        "</tr>"
+    )
+    body_rows = []
+    for i, row in enumerate(rows, start=1):
+        body_rows.append(
+            "<tr>"
+            f"<td>{i}</td>"
+            f"<td>{escape(str(row.get('prompt', '')))}</td>"
+            f"<td>{escape(str(row.get('completion', '')))}</td>"
+            f"<td>{float(row.get('reward_from_env', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_format', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_coverage', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('advantage', 0.0)):+.4f}</td>"
+            "</tr>"
+        )
+
+    return (
+        "<table style='width:100%; border-collapse:collapse; font-size:13px;'>"
+        "<thead style='background:#f3f4f6;'>"
+        f"{header}"
+        "</thead>"
+        "<tbody>"
+        f"{''.join(body_rows)}"
+        "</tbody>"
+        "</table>"
+    )
 
 class _HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         s = _TRAIN_STATUS
+        status_label = "Done" if s["done"] else "Training"
+        table_html = _render_rows_table(s.get("rows", []))
         body = (
-            f"<h2>Auditrix GRPO Training</h2>"
-            f"<p>Step: {s['step']}/{s['total']}</p>"
-            f"<p>{'✅ Done' if s['done'] else '🔄 Training...'}</p>"
+            "<html><head><title>Auditrix GRPO Training</title></head>"
+            "<body style='font-family:Segoe UI, sans-serif; padding:20px; background:#fafafa;'>"
+            "<h2 style='margin:0 0 8px 0;'>Auditrix GRPO Training</h2>"
+            f"<p style='margin:4px 0;'><strong>Status:</strong> {status_label}</p>"
+            f"<p style='margin:4px 0;'><strong>Step:</strong> {s['step']}/{s['total']}</p>"
+            f"<p style='margin:4px 0 14px 0;'><strong>Latest reward_from_env:</strong> {float(s.get('last_reward', 0.0)):.4f}</p>"
+            "<h3 style='margin:0 0 10px 0;'>Latest Batch (Structured Table)</h3>"
+            f"{table_html}"
+            "</body></html>"
         ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/html")
@@ -52,19 +103,21 @@ from datasets import Dataset
 from openenv_compliance_audit.environment import ComplianceAuditEnv
 from openenv_compliance_audit.models import AuditAction, ActionType
 from openenv_compliance_audit.tasks import TASKS
+from openenv_compliance_audit.rules import RULES, VIOLATION_SEVERITY
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 SYSTEM_PROMPT = """You are Auditrix, an expert compliance auditor that reasons under uncertainty.
 
 TOOL WORKFLOW:
 1. inspect_record(record_id)            — reveal a record's fields (required first)
-2. prioritize_rules(rule_order)         — declare your intended rule priority (highest-severity first)
+2. prioritize_rules(rule_priority_order) — declare intended rule priority (highest-severity first)
 3. apply_rule(record_id, rule_id)       — test a rule; returns verdict + confidence + evidence
 4. request_evidence(record_id, rule_id) — gather evidence before committing (free action)
 5. flag_violation(record_id, rule_id)   — officially flag a confirmed violation
 6. retract_flag(record_id, rule_id)     — undo a previous flag if new evidence changes your view
 7. mark_compliant(record_id)            — declare a record has no violations
-8. generate_report(summary)             — submit final audit report (ends episode)
+8. generate_report(report)              — submit final audit report (ends episode)
+9. finish                               — end episode when report already submitted
 
 VERDICT TAXONOMY returned by apply_rule / request_evidence:
   "violation"             — clear breach; flag immediately
@@ -102,8 +155,20 @@ All employee record fields are already revealed below.
 Analyze every record against every active rule, then output ONE JSON object only.
 No prose. No markdown fences. Raw JSON only.
 
+Use the exact environment action schema and names:
+    action_type in {
+        inspect_record, apply_rule, request_evidence, flag_violation,
+        retract_flag, mark_compliant, prioritize_rules, generate_report, finish
+    }
+    fields: record_id | rule_id | rule_priority_order | report
+
 Output format:
 {
+    "actions": [
+        {"action_type": "prioritize_rules", "rule_priority_order": ["R9", "R1", "R4"]},
+        {"action_type": "flag_violation", "record_id": "E001", "rule_id": "R1"},
+        {"action_type": "mark_compliant", "record_id": "E002"}
+    ],
   "violations": [
     {"record_id": "E001", "rule_id": "R1", "reason": "brief explanation"}
   ],
@@ -158,14 +223,31 @@ def build_prompt(task_id: str) -> list[dict]:
     available_rules = obs_dict.get("available_rules") or []
     if available_rules:
         rules_text = "\n".join(
-            f"  {r['rule_id']}: {r.get('description', '')}" for r in available_rules)
+            f"  {r['rule_id']} [{r.get('severity', 'medium')}]: {r.get('description', '')}"
+            f" | condition: {r.get('condition', '')}"
+            for r in available_rules
+        )
     else:
         rules_text = "\n".join(
-            f"  {rid}: (see RULES REFERENCE above)" for rid in task.active_rule_ids)
+            f"  {rid} [{VIOLATION_SEVERITY.get(rid, 'medium')}]: {RULES[rid].description}"
+            f" | condition: {RULES[rid].condition_summary}"
+            for rid in task.active_rule_ids
+            if rid in RULES
+        )
+
+    action_schema_text = (
+        "  action_type: inspect_record | apply_rule | request_evidence | flag_violation | "
+        "retract_flag | mark_compliant | prioritize_rules | generate_report | finish\n"
+        "  record_id: string|null\n"
+        "  rule_id: string|null\n"
+        "  rule_priority_order: string[]|null\n"
+        "  report: object|null"
+    )
 
     user_content = (
         f"TASK: {task_id}\n\n"
         f"ACTIVE RULES:\n{rules_text}\n\n"
+        f"ACTION SCHEMA:\n{action_schema_text}\n\n"
         f"EMPLOYEE RECORDS:\n{json.dumps(revealed, indent=2, default=str)}\n\n"
         f"Output your JSON audit report now."
     )
@@ -186,6 +268,48 @@ def _parse_output(text: str) -> dict:
             except Exception: pass
     return {}
 
+
+def _normalize_output(output: dict) -> dict:
+    """Normalize action-centric outputs into report-centric fields used by rewards.
+
+    Supports either direct report JSON (violations/compliant_records/summary)
+    or action-driven JSON containing an "actions" list with action_type entries.
+    """
+    if not isinstance(output, dict):
+        return {"violations": [], "compliant_records": [], "summary": ""}
+
+    if all(k in output for k in ("violations", "compliant_records", "summary")):
+        return output
+
+    actions = output.get("actions") if isinstance(output.get("actions"), list) else []
+    violations = []
+    compliant = set()
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        a_type = action.get("action_type")
+        if a_type == "flag_violation" and action.get("record_id") and action.get("rule_id"):
+            violations.append(
+                {
+                    "record_id": str(action.get("record_id")),
+                    "rule_id": str(action.get("rule_id")),
+                    "reason": str(action.get("reason", "from action sequence")),
+                }
+            )
+        elif a_type == "mark_compliant" and action.get("record_id"):
+            compliant.add(str(action.get("record_id")))
+
+    summary = output.get("summary")
+    if not isinstance(summary, str) or not summary.strip():
+        summary = f"Found {len(violations)} violations from action sequence."
+
+    return {
+        "violations": violations,
+        "compliant_records": sorted(compliant),
+        "summary": summary,
+    }
+
 _RID_KEYS  = ("record_id", "employee_id", "id", "emp_id", "employee", "record")
 _RULE_KEYS = ("rule_id", "rule", "rule_name", "violation_rule",
               "violated_rule", "violated_rule_id", "ruleid")
@@ -201,6 +325,7 @@ def _extract_violations(output: dict) -> set[tuple[str, str]]:
     return predicted
 
 def _score(output: dict, task_id: str) -> tuple[float, float, float]:
+    output = _normalize_output(output)
     gt        = GROUND_TRUTH.get(task_id, set())
     predicted = _extract_violations(output)
     if not gt and not predicted: return 1.0, 1.0, 1.0
@@ -242,8 +367,12 @@ def reward_format(completions, prompts, **kwargs) -> list[float]:
     scores = []
     for completion in completions:
         text = completion[0]["content"] if isinstance(completion, list) else str(completion)
-        out  = _parse_output(text)
-        ok   = all(k in out for k in ("violations", "compliant_records", "summary"))
+        out  = _normalize_output(_parse_output(text))
+        ok   = (
+            isinstance(out.get("violations"), list)
+            and isinstance(out.get("compliant_records"), list)
+            and isinstance(out.get("summary"), str)
+        )
         scores.append(0.1 if ok else 0.0)
     return scores
 
@@ -270,25 +399,48 @@ class AuditLogCallback(TrainerCallback):
         step    = state.global_step
         reward  = logs.get("reward")
         _TRAIN_STATUS["step"] = step
+        _TRAIN_STATUS["last_reward"] = float(reward) if reward is not None else float(_TRAIN_STATUS.get("last_reward", 0.0))
 
         if reward is None: return  # skip non-reward log lines
 
         print(f"\n{'═'*72}")
         print(f"Step {step:>4}/{args.max_steps}  |  reward_from_env={reward:.4f}")
         print(f"{'─'*72}")
+        print("| # | reward_from_env | reward_format | reward_coverage | Advantage |")
+        print("|---|-----------------|---------------|-----------------|-----------|")
+
+        batch_mean = sum(e["f1"] for e in _LAST_BATCH) / len(_LAST_BATCH) if _LAST_BATCH else 0.0
+        rows = []
 
         for i, entry in enumerate(_LAST_BATCH):
-            # Advantage = reward - mean reward across batch (approximation for display)
-            batch_mean = sum(e["f1"] for e in _LAST_BATCH) / len(_LAST_BATCH)
             advantage  = entry["f1"] - batch_mean
+            reward_format = 0.1 if entry["f1"] > 0 else 0.0
+
+            rows.append(
+                {
+                    "prompt": entry["prompt"],
+                    "completion": entry["completion"],
+                    "reward_from_env": entry["f1"],
+                    "reward_format": reward_format,
+                    "reward_coverage": entry["coverage"],
+                    "advantage": advantage,
+                }
+            )
+
+            print(
+                f"| {i+1} | {entry['f1']:.4f} | {reward_format:.4f} | "
+                f"{entry['coverage']:.4f} | {advantage:+.4f} |"
+            )
 
             print(f"  [{i+1}] Prompt    : {entry['prompt']}")
             print(f"       Completion: {entry['completion']}")
             print(f"       reward_from_env={entry['f1']:.4f} | "
-                  f"reward_format={0.1 if entry['f1'] > 0 else 0.0:.1f} | "
+                  f"reward_format={reward_format:.1f} | "
                   f"reward_coverage={entry['coverage']:.4f} | "
                   f"Advantage={advantage:+.4f}")
             print()
+
+        _TRAIN_STATUS["rows"] = rows
 
     def on_train_end(self, args, state, control, **kwargs):
         _TRAIN_STATUS["done"] = True
