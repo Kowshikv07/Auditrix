@@ -12,10 +12,10 @@ requests==2.32.3
 # Training / RL stack
 torch
 transformers
-datasets>=2.21.0,<3.0.0
+datasets>=3.0.0,<4.0.0
 peft
 accelerate
-trl>=0.18.0
+trl>=0.29.0,<0.30.0
 
 # Optional (recommended on Linux GPU/Colab for faster GRPO training)
 unsloth
