@@ -64,13 +64,17 @@ def tasks() -> dict:
         "action_type": [
             "inspect_record",
             "apply_rule",
+            "request_evidence",
             "flag_violation",
+            "retract_flag",
             "mark_compliant",
+            "prioritize_rules",
             "generate_report",
             "finish",
         ],
         "record_id": "string|null",
         "rule_id": "string|null",
+        "rule_priority_order": "string[]|null",
         "report": "object|null",
     }
 
