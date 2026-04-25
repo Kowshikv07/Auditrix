@@ -130,31 +130,50 @@ VERDICT TAXONOMY returned by apply_rule / request_evidence:
   "insufficient_evidence" — required fields missing; cannot evaluate safely
   "compliant"             — rule not triggered
 
-RULES (only active rules apply per task):
-R1  [critical]: age<18 and hours>8 → minor employee overhours
-R2  [low]:      role='intern' and hours>40 → intern overhours
-R3  [medium]:   salary outside role band → salary violation (±2% = warning zone)
-R4  [critical]: duplicate employee ID across records
-R5  [high]:     contract_end<'2024-01-01' and status='active' → expired contract
-R6  [high]:     sensitive role without background_check → missing background check
-R7  [medium]:   hours>48 and overtime_approved!=True → unapproved overtime
-R8  [high]:     status='active' and compliance_training!=True → missing training
-R9  [critical]: pii_access=True and gdpr_consent!=True → GDPR consent missing
-R10 [low]:      missing required fields (id, name, role, hours, salary)
-R11 [high]:     manager_id references non-existent employee (cross-record check)
+    RULES (only active rules apply per task):
+    R1  [critical]: age < 18 and hours > threshold (default 8; may change by POLICY_UPDATE)
+    R2  [low]:      role == intern and hours > threshold (default 40)
+    R3  [medium]:   salary outside role band (within +-2% of band edge => warning)
+    R4  [critical]: duplicate employee ID across records
+    R5  [high]:     contract_end < 2024-01-01 and status == active
+    R6  [high]:     sensitive role and background_check != True
+    R7  [medium]:   hours > threshold (default 48) and overtime_approved != True
+                                     exactly threshold hours is NOT a violation; threshold may be updated
+    R8  [high]:     status == active and compliance_training != True
+                                     inactive employees are exempt
+    R9  [critical]: pii_access == True and gdpr_consent != True
+                                     if pii_access is False/absent, rule does not apply
+    R10 [low]:      any of {id,name,role,hours,salary} missing or null (zero is valid)
+    R11 [high]:     manager_id is non-null and not found among employee IDs
 
-SEVERITY-BASED SCORING: critical/high violations are worth MORE. Prioritize them.
-DYNAMIC EVENTS may change rules mid-episode — always use apply_rule with current state.
+    SEVERITY-WEIGHTED SCORING:
+        critical (R1, R4, R9) => 2.0
+        high     (R5, R6, R8, R11) => 1.5
+        medium   (R3, R7) => 1.0
+        low      (R2, R10) => 0.5
 
-STRATEGY:
-  1. prioritize_rules([highest→lowest severity]) once at the start
-  2. For each record: inspect → apply high-severity rules first
-     - verdict=violation → flag_violation immediately
-     - verdict=warning → request_evidence, then decide flag vs pass
-     - verdict=insufficient_evidence → mark_compliant if no other violations
-  3. If a POLICY_UPDATE fires, re-apply affected rules on already-inspected records
-  4. If you flagged in error, retract_flag before report
-  5. generate_report when done or steps are running low
+    DYNAMIC EVENTS:
+        POLICY_UPDATE: thresholds change mid-episode; re-evaluate affected records
+        SYSTEM_OUTAGE: temporarily inaccessible records; skip and retry later
+        RECORD_AMENDMENT: record corrected mid-episode; re-run rule and retract wrong flags
+        RULE_SUSPENSION: suspended rules must be skipped while suspended
+
+    STRATEGY:
+        1. prioritize_rules([highest->lowest severity]) once at start
+        2. inspect every record first (skip outage records and revisit later)
+        3. apply_rule on active, non-suspended rules by severity priority
+             - violation: flag_violation immediately
+             - warning: request_evidence, then decide
+             - insufficient_evidence: do not flag; mark_compliant if no true violations
+        4. after RECORD_AMENDMENT or POLICY_UPDATE, re-evaluate impacted records/rules
+        5. retract_flag when prior flag becomes invalid
+        6. finish with generate_report including audit_confidence for bonus
+
+    CRITICAL EXECUTION RULES:
+        - avoid repeated identical actions (loop penalties)
+        - do not apply suspended rules
+        - use exact record_id and rule_id values from observation
+        - prioritize critical/high violations over low-severity checks
 
 All employee record fields are already revealed below.
 Even with revealed fields, include inspect_record actions first for each record to match environment workflow.
@@ -173,7 +192,22 @@ Output format:
     "actions": [
         {"action_type": "prioritize_rules", "rule_priority_order": ["R9", "R1", "R4"]},
         {"action_type": "flag_violation", "record_id": "E001", "rule_id": "R1"},
-        {"action_type": "mark_compliant", "record_id": "E002"}
+                    {"action_type": "mark_compliant", "record_id": "E002"},
+                    {
+                        "action_type": "generate_report",
+                        "report": {
+                            "summary": "Found N violations across M records.",
+                            "flagged_violations": [{"record_id": "E001", "rule_id": "R1"}],
+                            "compliant_records": ["E002", "E003"],
+                            "recommendations": ["Review warnings and amended records manually."],
+                            "audit_confidence": {
+                                "evidence_coverage_ratio": 0.9,
+                                "high_confidence_flags": ["E001:R1"],
+                                "uncertain_flags": [],
+                                "reasoning": "Critical and high-severity rules validated first."
+                            }
+                        }
+                    }
     ],
   "violations": [
     {"record_id": "E001", "rule_id": "R1", "reason": "brief explanation"}
