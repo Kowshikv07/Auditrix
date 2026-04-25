@@ -8,3 +8,17 @@ streamlit==1.40.1
 plotly==5.24.1
 pandas==2.2.3
 requests==2.31.0
+
+# Training / RL stack
+torch
+transformers
+datasets
+peft
+accelerate
+trl>=0.18.0
+
+# Optional (recommended on Linux GPU/Colab for faster GRPO training)
+unsloth
+
+# Dev / testing
+pytest
