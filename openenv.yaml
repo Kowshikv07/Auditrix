@@ -1,25 +1,37 @@
 id: openenv-compliance-audit
-name: OpenEnv Compliance Audit
-version: 1.0.0
+name: Auditrix — Compliance Audit Environment
+version: 1.1.0
 description: >
-  A deterministic, real-world compliance audit environment where an AI agent
-  inspects structured organisational records, applies configurable compliance
-  rules, flags violations, and produces a final audit report.
+  A training environment for reliable, auditable decision-making under uncertainty
+  in high-stakes enterprise systems. An AI agent inspects structured organisational
+  records, applies configurable compliance rules, deliberates using confidence-calibrated
+  verdicts, and produces a final audit report — prioritising high-severity violations
+  under step-budget constraints.
 
-  Six tasks span three difficulty levels:
-    • easy_basic_audit      — 5 records,  2 rules (R1, R2): minor/intern overhours
-    • medium_mixed_audit    — 12 records, 4 rules (R1-R4): salary, duplicate IDs
-    • hard_complex_audit    — 20 records, 5 rules (R1-R5): expired contracts, edge cases
-    • finance_sox_audit     — 15 records, 4 rules (R3, R6, R7, R8): SOX pre-certification
-    • gdpr_privacy_audit    — 10 records, 3 rules (R5, R8, R9): GDPR data-privacy
-    • data_integrity_audit  —  8 records, 3 rules (R3, R4, R10): missing fields + dup IDs
+  Eight tasks spanning five difficulty levels — including long-horizon sparse-reward
+  and extreme stress-test scenarios designed for Theme #2 (Long-Horizon Planning)
+  and Theme #3.1 (World Modeling / Professional Tasks):
+    • easy_basic_audit         — 5 records,   2 rules (R1, R2): minor/intern overhours
+    • medium_mixed_audit       — 12 records,  4 rules (R1-R4): salary, duplicate IDs
+    • hard_complex_audit       — 20 records,  5 rules (R1-R5): expired contracts, edge cases
+    • finance_sox_audit        — 15 records,  4 rules (R3, R6, R7, R8): SOX pre-certification
+    • gdpr_privacy_audit       — 10 records,  3 rules (R5, R8, R9): GDPR data-privacy
+    • data_integrity_audit     —  8 records,  3 rules (R3, R4, R10): missing fields + dup IDs
+    • regulatory_storm_audit   — 25 records, 11 rules (R1-R11): extreme multi-domain stress-test
+                                  with POLICY_UPDATE, SYSTEM_OUTAGE, RECORD_AMENDMENT, RULE_SUSPENSION
+                                  and R11 cross-record manager reference integrity checks
+    • streaming_long_horizon   — 350 records, 10 rules (R1-R10), 400 steps, sparse rewards.
+                                  Agent must prioritize_rules() then strategically sample records.
 
-  Ten rules across five compliance domains:
+  Eleven rules across five compliance domains:
     Employment (R1, R2, R7): minor protection, intern caps, overtime law
-    Financial  (R3):         salary band enforcement
-    Data Integrity (R4, R10): duplicate IDs, missing required fields
+    Financial  (R3):         salary band enforcement (warning zone at ±2% boundary)
+    Data Integrity (R4, R10, R11): duplicate IDs, missing fields, orphan manager references
     Governance (R5, R6, R8): expired contracts, background checks, training
     Data Privacy (R9):       GDPR consent for PII access
+
+  Verdict taxonomy: violation | warning | insufficient_evidence | compliant
+  Severity tiers: critical (R1, R4, R9) | high (R5, R6, R8, R11) | medium (R3, R7) | low (R2, R10)
 
 author: Kowshik
 license: MIT
@@ -33,6 +45,10 @@ tags:
   - gdpr
   - deterministic-evaluation
   - real-world
+  - long-horizon
+  - sparse-rewards
+  - scale-ai-bonus
+  - mercor-bonus
 
 entrypoint:
   module: openenv_compliance_audit.server
@@ -98,7 +114,36 @@ tasks:
       6 violation pairs; key challenge: a record missing salary skips R3
       gracefully but still triggers R10 (null-safe rule evaluation).
 
+  - id: regulatory_storm_audit
+    difficulty: extreme
+    title: "Regulatory Storm: Multi-Domain Stress-Test Audit"
+    objective: >
+      Extreme stress-test across 25 records with all 11 rules (R1-R11) simultaneously.
+      Three simultaneous duplicate-ID groups; overlapping GDPR + overtime violations;
+      R11 orphan manager references requiring cross-record reasoning; mid-episode
+      dynamic events: POLICY_UPDATE (overtime 48→40), two SYSTEM_OUTAGEs,
+      two RECORD_AMENDMENTs. Severity-weighted scoring: catching GDPR violations
+      counts 4x more than catching low-severity ones.
+      Score >=0.50 requires zero false positives and >=50% severity-weighted detection.
+
+  - id: streaming_long_horizon
+    difficulty: streaming
+    title: Streaming Long-Horizon Multi-Rule Priority Audit
+    objective: >
+      Long-horizon sparse-reward audit of 350 employee records against all 10
+      rules (R1-R10) within a 400-step budget.
+      The agent MUST call prioritize_rules(rule_order=[...]) before auditing
+      to commit to a rule-priority strategy — this action is free but mandatory
+      for achieving high scores.
+      Sparse terminal-focused rewards with low-magnitude per-step shaping
+      (e.g., inspect/flag/penalty signals) plus terminal reward on generate_report.
+      Target: ≥30% record coverage (105/350) with high detection rate and
+      zero false positives. Tests long-horizon planning, strategic sampling,
+      and recovery from delayed reward signals.
+
 huggingface:
   sdk: docker
   tags:
     - openenv
+    - long-horizon
+    - sparse-rewards
