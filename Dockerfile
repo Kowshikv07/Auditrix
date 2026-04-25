@@ -32,7 +32,8 @@ RUN pip install \
     "accelerate==1.4.0" \
     "bitsandbytes==0.44.1" \
     "datasets==3.1.0" \
-    "huggingface_hub>=0.24.0"
+    "huggingface_hub>=0.24.0" && \
+    pip uninstall -y torchao || true
 
 COPY . .
 RUN pip install -e . --no-deps
