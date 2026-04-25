@@ -7,6 +7,9 @@ import json, os, re, torch, threading
 from html import escape
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+# Helps reduce CUDA allocator fragmentation on long GRPO runs.
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 # ── Config ────────────────────────────────────────────────────────────────────
 MODEL_NAME       = "Qwen/Qwen2.5-3B-Instruct"
 TRAIN_TASKS      = ["easy_basic_audit"]
@@ -17,6 +20,12 @@ OUTPUT_DIR       = "auditrix-grpo-output"
 HF_TOKEN         = os.getenv("HF_TOKEN")
 PUSH_TO_HUB      = os.getenv("PUSH_TO_HUB", "0") == "1"
 HUB_REPO_ID      = os.getenv("HUB_REPO_ID", "")
+
+# Memory-sensitive GRPO knobs (override in Space variables if needed).
+GRPO_NUM_GENERATIONS = int(os.getenv("GRPO_NUM_GENERATIONS", "2"))
+GRPO_MAX_PROMPT_LENGTH = int(os.getenv("GRPO_MAX_PROMPT_LENGTH", "1024"))
+GRPO_MAX_COMPLETION_LENGTH = int(os.getenv("GRPO_MAX_COMPLETION_LENGTH", "256"))
+GRPO_GRAD_ACCUM_STEPS = int(os.getenv("GRPO_GRAD_ACCUM_STEPS", "8"))
 
 # ── Health-check server ───────────────────────────────────────────────────────
 _TRAIN_STATUS = {
@@ -682,6 +691,7 @@ def load_model():
                         "gate_proj","up_proj","down_proj"],
         lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM,
     ))
+    model.gradient_checkpointing_enable()
     model.print_trainable_parameters()
     return model, tokenizer
 
@@ -703,6 +713,30 @@ def train():
     dataset = build_dataset()
     use_bf16 = torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] >= 8
 
+    if torch.cuda.is_available():
+        total_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+    else:
+        total_gb = 0.0
+
+    # Conservative defaults for ~24GB GPUs (e.g., L4) to avoid GRPO OOM.
+    if total_gb and total_gb <= 24:
+        num_generations = min(GRPO_NUM_GENERATIONS, 2)
+        max_prompt_length = min(GRPO_MAX_PROMPT_LENGTH, 1024)
+        max_completion_length = min(GRPO_MAX_COMPLETION_LENGTH, 256)
+    else:
+        num_generations = GRPO_NUM_GENERATIONS
+        max_prompt_length = GRPO_MAX_PROMPT_LENGTH
+        max_completion_length = GRPO_MAX_COMPLETION_LENGTH
+
+    print(
+        "GRPO memory config | "
+        f"gpu_total_gb={total_gb:.1f} | "
+        f"num_generations={num_generations} | "
+        f"max_prompt_length={max_prompt_length} | "
+        f"max_completion_length={max_completion_length} | "
+        f"grad_accum={GRPO_GRAD_ACCUM_STEPS}"
+    )
+
     config = GRPOConfig(
         learning_rate=5e-6,
         weight_decay=0.1,
@@ -712,10 +746,10 @@ def train():
         bf16=use_bf16,
         fp16=torch.cuda.is_available() and not use_bf16,
         per_device_train_batch_size=1,
-        gradient_accumulation_steps=4,
-        num_generations=4,
-        max_prompt_length=1800,
-        max_completion_length=768,
+        gradient_accumulation_steps=GRPO_GRAD_ACCUM_STEPS,
+        num_generations=num_generations,
+        max_prompt_length=max_prompt_length,
+        max_completion_length=max_completion_length,
         max_steps=GRPO_STEPS,
         save_steps=50,
         max_grad_norm=0.1,
@@ -742,6 +776,8 @@ def train():
     )
 
     print(f"\nStarting GRPO — {GRPO_STEPS} steps | task: easy_basic_audit only")
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
     trainer.train()
 
     trainer.save_model(OUTPUT_DIR)
