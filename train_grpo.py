@@ -699,7 +699,7 @@ def dry_run():
             e.generate_report("Quick audit done.")
         envs.append(e)
 
-    rewards = audit_reward_func(envs)
+    rewards = {fn.__name__: fn(envs) for fn in REWARD_FUNCS}
     print(f"\n{'═' * 60}")
     print(f"Reward function test: {rewards}")
     print(f"{'═' * 60}")

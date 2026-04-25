@@ -135,7 +135,8 @@ tasks:
       The agent MUST call prioritize_rules(rule_order=[...]) before auditing
       to commit to a rule-priority strategy — this action is free but mandatory
       for achieving high scores.
-      Zero per-step reward; terminal reward on generate_report only.
+      Sparse terminal-focused rewards with low-magnitude per-step shaping
+      (e.g., inspect/flag/penalty signals) plus terminal reward on generate_report.
       Target: ≥30% record coverage (105/350) with high detection rate and
       zero false positives. Tests long-horizon planning, strategic sampling,
       and recovery from delayed reward signals.

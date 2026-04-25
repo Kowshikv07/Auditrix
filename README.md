@@ -21,7 +21,7 @@ tags:
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-configured-brightgreen)]()
 
 ---
 
@@ -32,7 +32,7 @@ Auditrix was designed as a powerhouse solver for two major hackathon themes:
 **1. Theme #2: Long-Horizon Planning (Scale AI Bonus - HR & IT Workflows)**
 - Our environment explicitly tackles the **Scale AI Bonus** by providing a long-horizon, multi-step workflow in a business/HR setting (Employee Records, Salaries, Timesheets, Background Checks).
 - The agent must orchestrate dozens of interactions (up to 80 steps for hard tasks, **400 steps** for the streaming task), track state over extended trajectories, and deal with highly delayed rewards (the terminal score at the exact end of an audit).
-- The **`streaming_long_horizon` task** (350 records, 400 steps, zero per-step reward) directly tests the sub-theme requirement: *"agents must decompose goals, track state over extended trajectories, and push beyond shallow next-token reasoning."*
+- The **`streaming_long_horizon` task** (350 records, 400 steps, sparse terminal-focused reward with low-magnitude shaping) directly tests the sub-theme requirement: *"agents must decompose goals, track state over extended trajectories, and push beyond shallow next-token reasoning."*
 - The **`prioritize_rules` action** forces the agent to commit to a multi-step strategy *before* seeing any rewards — a true long-horizon planning signal.
 - The **Mercor Bonus** is satisfied by the `streaming_long_horizon` grader: terminal reward scales with output tokens because longer, more complete reports (with `audit_confidence` sections, full `flagged_violations` lists, and `recommendations`) score higher, creating a natural token-output reward gradient.
 
@@ -68,8 +68,8 @@ This domain is directly applicable to training and evaluating agents for:
 | **Structured Explainability** | `evaluate_with_evidence()` returns `reason_codes` + field-level evidence per rule |
 | **Audit Confidence Report** | `generate_report` accepts an `audit_confidence` section with evidence coverage ratio |
 | **Anti-Exploit Grading** | Loop detection (sliding window), report consistency check, coverage floor |
-| **Extreme Task** | `regulatory_storm_audit` — 25 records, all 10 rules, 6 simultaneous dynamic events |
-| **Streaming Long-Horizon** | `streaming_long_horizon` — 350 records, 400 steps, **zero per-step reward** (sparse), `prioritize_rules` strategy action |
+| **Extreme Task** | `regulatory_storm_audit` — 25 records, all 11 rules, 6 simultaneous dynamic events |
+| **Streaming Long-Horizon** | `streaming_long_horizon` — 350 records, 400 steps, sparse reward with strong terminal signal, `prioritize_rules` strategy action |
 | **Token-Scaled Reward** | Report quality grader rewards richer structured reports → terminal reward scales with output quality (Mercor Bonus) |
 | **Variance Reporting** | `--seeds N` runs each task N times; reports mean±std + failure mode taxonomy |
 
@@ -143,7 +143,7 @@ Every `step()` and `reset()` returns an `AuditObservation`:
 
 ## Compliance Rules
 
-Ten deterministic rules across five real-world domains:
+Eleven deterministic rules across five real-world domains:
 
 | Rule | Condition | Domain | Edge Cases |
 |---|---|---|---|
@@ -157,6 +157,7 @@ Ten deterministic rules across five real-world domains:
 | **R8** | `status == "active" and compliance_training != True` | SOX § 301 / GDPR Art. 39 | Inactive employees → exempt |
 | **R9** | `pii_access == True and gdpr_consent != True` | GDPR Art. 7 / CCPA | `pii_access == False` → exempt |
 | **R10** | Missing one or more required fields (`id`, `name`, `role`, `hours`, `salary`) | Data integrity | `0` is valid; only missing/`null` triggers |
+| **R11** | `manager_id` is present but does not match any employee `id` in the dataset | Org graph integrity | `manager_id == null` → exempt; cross-record check required |
 
 ### Salary ranges by role (R3)
 
@@ -194,7 +195,7 @@ Eight tasks across five difficulty levels:
 | `finance_sox_audit` | 🔴 Hard | 15 | R3, R6, R7, R8 | 17 | 80 |
 | `gdpr_privacy_audit` | 🟡 Medium | 10 | R5, R8, R9 | 9 | 50 |
 | `data_integrity_audit` | 🟡 Medium | 8 | R3, R4, R10 | 6 | 40 |
-| `regulatory_storm_audit` | ⚫ Extreme | 25 | R1–R10 (all) | 35+ | 120 |
+| `regulatory_storm_audit` | ⚫ Extreme | 25 | R1–R11 (all) | 35+ | 120 |
 | `streaming_long_horizon` | 🌊 Streaming | 350 | R1–R10 (all) | ~180 | 400 |
 
 ---
@@ -289,7 +290,7 @@ Audit 5 employee records against 2 rules. Two clear violations exist (one minor 
 
 ### ⚫ Extreme — Regulatory Storm: Multi-Domain Stress-Test
 
-25 records covering **all 10 rules simultaneously**. This is the hardest hand-crafted scenario:
+25 records covering **all 11 rules simultaneously**. This is the hardest hand-crafted scenario:
 - **THREE simultaneous duplicate-ID groups** (ids 5, 12, 20 — each appears in 2-3 records)
 - Records violating GDPR + overtime simultaneously; evidence for one reveals the other
 - Missing fields at varying severity (R10)
@@ -297,20 +298,20 @@ Audit 5 employee records against 2 rules. Two clear violations exist (one minor 
 - **6 simultaneous dynamic events**: `POLICY_UPDATE` (overtime threshold 48→40), 2× `SYSTEM_OUTAGE` blocking records for multiple steps, 2× `RECORD_AMENDMENT` that auto-resolve violations mid-episode
 - Static memorisation fails: the agent must track live state and react to seed-dependent events
 
-**Pre-event ground-truth violations (35 pairs across 25 records):**
-`RS001(R1)`, `RS002(R2+R3)`, `RS003(R8→resolved)`, `RS004(R5+R9)`, `RS005(R3+R4+R7)`, `RS006(R4)`, `RS007(R6+R8)`, `RS008(R4)`, `RS009(R10)`, `RS010(R3+R9)`, `RS011(R7)`, `RS012(R4+R5)`, `RS013(R6)`, `RS014(R3)`, `RS015(R8+R9)`, `RS016(R4)`, `RS017(R10)`, `RS018(R3+R6)`, `RS019(R6→resolved)`, `RS020(R2+R4+R8)`, `RS024(R3+R8)`
+**Pre-event ground-truth violations (35+ pairs across 25 records):**
+`RS001(R1)`, `RS002(R2+R3)`, `RS003(R8→resolved)`, `RS004(R5+R9+R11)`, `RS005(R3+R4+R7)`, `RS006(R4)`, `RS007(R6+R8)`, `RS008(R4)`, `RS009(R10)`, `RS010(R3+R9+R11)`, `RS011(R7)`, `RS012(R4+R5)`, `RS013(R6)`, `RS014(R3)`, `RS015(R8+R9)`, `RS016(R4)`, `RS017(R10)`, `RS018(R3+R6)`, `RS019(R6→resolved)`, `RS020(R2+R4+R8)`, `RS024(R3+R8)`
 
 ---
 
 ### 🌊 Streaming — Long-Horizon Multi-Rule Priority Audit *(new for Theme #2)*
 
-**The flagship long-horizon task.** 350 records, all 10 rules, 400-step budget, **zero per-step reward**.
+**The flagship long-horizon task.** 350 records, all 10 rules, 400-step budget, sparse reward with strong terminal emphasis.
 
 **The key challenge:** an agent that mechanically inspects and applies rules in order will exhaust its step budget before reaching 30% coverage. It must plan.
 
 **How it works:**
 1. **Mandatory strategy declaration**: The agent's first action should be `prioritize_rules(rule_order=["R8", "R3", ...])`. This commits the agent to a rule-priority order for the session. This action is free (costs no steps).
-2. **Sparse rewards**: zero reward per-step for `inspect_record`, `apply_rule`, `flag_violation`, `mark_compliant`. Only `generate_report` yields a terminal reward.
+2. **Sparse terminal-focused rewards**: low-magnitude per-step shaping in streaming mode (`inspect_record`, `flag_violation`, penalties) plus primary terminal reward from `generate_report`.
 3. **Coverage target**: Score ≥ 0.50 requires inspecting ≥ 30% of records (105/350) within the 400-step budget.
 4. **Mid-episode amendments**: `RECORD_AMENDMENT` events fire at random steps (deterministic per seed), removing violations from the live dataset. An agent that inspects early and flags late may flag a violation that was since corrected.
 
@@ -571,7 +572,7 @@ Scores from `Qwen/Qwen2.5-72B-Instruct` via HF inference router (temperature=0, 
 | **Average (6 standard)** | | **~0.72** |
 
 > Scores are fully reproducible: same model + seed → identical output. Run `python inference.py` to reproduce.
-> The two new tasks (`regulatory_storm_audit`, `streaming_long_horizon`) are estimated scores pending full benchmark run.
+> Update this table only with benchmarked runs. Keep seed/model/task settings fixed for reproducibility.
 
 ---
 
@@ -585,7 +586,7 @@ openenv/
 │   ├── events.py                   # EventScheduler (POLICY_UPDATE / SYSTEM_OUTAGE / RECORD_AMENDMENT)
 │   ├── graders.py                  # Deterministic scoring (Easy / Medium / Hard / Extreme / Streaming)
 │   ├── models.py                   # Pydantic typed models
-│   ├── rules.py                    # Rule engine — R1 through R10
+│   ├── rules.py                    # Rule engine — R1 through R11
 │   ├── server.py                   # FastAPI app (OpenEnv HTTP interface)
 │   └── tasks.py                    # 8 task definitions with ground-truth violations
 ├── tests/
@@ -630,7 +631,7 @@ openenv/
 ### 2) Unit tests
 
 ```text
-46 passed in 1.31s
+[placeholder]
 ```
 
 ### 3) Docker build
