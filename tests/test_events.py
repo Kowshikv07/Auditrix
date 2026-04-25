@@ -292,7 +292,7 @@ def test_regulatory_storm_resets_cleanly() -> None:
     assert obs.task_id == "regulatory_storm_audit"
     assert len(obs.visible_records) == 25
     assert state.difficulty == "extreme"
-    assert len(state.active_rule_ids) == 10
+    assert len(state.active_rule_ids) == 11
     assert obs.step_index == 0
     assert obs.remaining_steps == 120
 

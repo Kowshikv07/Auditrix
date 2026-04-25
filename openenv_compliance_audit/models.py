@@ -9,7 +9,9 @@ from pydantic import BaseModel, Field, field_validator
 class ActionType(str, Enum):
     INSPECT_RECORD = "inspect_record"
     APPLY_RULE = "apply_rule"
+    REQUEST_EVIDENCE = "request_evidence"   # deliberate before flagging — free (0 reward, costs 1 step)
     FLAG_VIOLATION = "flag_violation"
+    RETRACT_FLAG = "retract_flag"           # undo a flag; -0.10 (correct retract) / -0.20 (correct flag retracted)
     MARK_COMPLIANT = "mark_compliant"
     PRIORITIZE_RULES = "prioritize_rules"
     GENERATE_REPORT = "generate_report"
@@ -58,15 +60,24 @@ class ViolationEntry(BaseModel):
     record_id: str
     rule_id: str
     description: str
+    severity: str = Field(default="medium", description="critical | high | medium | low")
 
 
 class DecisionTrace(BaseModel):
-    """Structured explainability trace for apply_rule/flag_violation actions."""
+    """Structured explainability trace for apply_rule/request_evidence/flag_violation actions."""
 
-    action_type: Literal["apply_rule", "flag_violation"]
+    action_type: Literal["apply_rule", "request_evidence", "flag_violation"]
     record_id: str
     rule_id: str
     outcome: str
+    verdict: str = Field(
+        default="compliant",
+        description="One of: violation | warning | insufficient_evidence | compliant",
+    )
+    confidence_tier: str = Field(
+        default="high",
+        description="One of: high | medium | low"
+    )
     reason_codes: List[str] = Field(default_factory=list)
     rule_evidence: Optional[Dict[str, Any]] = None
 
@@ -79,6 +90,7 @@ class EventType(str, Enum):
     POLICY_UPDATE = "policy_update"        # A rule's threshold changes mid-episode
     SYSTEM_OUTAGE = "system_outage"        # A record becomes temporarily inaccessible
     RECORD_AMENDMENT = "record_amendment"  # A field value is corrected mid-episode
+    RULE_SUSPENSION = "rule_suspension"    # A rule is temporarily deactivated mid-episode
 
 
 class EventEntry(BaseModel):
@@ -277,6 +289,16 @@ class AuditState(BaseModel):
     loop_exploit_signature: Optional[str] = Field(
         default=None,
         description="Action signature (action_type:record_id) that triggered loop exploit detection",
+    )
+    # Warning call tracking: list of (record_id, rule_id) that returned 'warning' verdict
+    warning_calls: List[str] = Field(
+        default_factory=list,
+        description="'record_id:rule_id' pairs where apply_rule returned verdict=warning",
+    )
+    # Suspended rule tracking
+    suspended_rule_ids: List[str] = Field(
+        default_factory=list,
+        description="rule_ids temporarily deactivated by RULE_SUSPENSION events",
     )
 
 

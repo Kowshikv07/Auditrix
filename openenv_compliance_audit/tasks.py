@@ -804,6 +804,7 @@ _REGULATORY_STORM_RECORDS: List[RecordTruth] = [
         expected_violations=["R8"],  # resolved by RECORD_AMENDMENT event
     ),
     # RS004: Active contractor, contract expired (R5) + PII access without consent (R9)
+    #        manager_id=999 references non-existent employee → R11 (cross-record check)
     RecordTruth(
         record_id="RS004",
         fields={
@@ -812,8 +813,9 @@ _REGULATORY_STORM_RECORDS: List[RecordTruth] = [
             "contract_end": "2023-03-01",  # expired
             "background_check": False, "overtime_approved": True,
             "compliance_training": True, "pii_access": True, "gdpr_consent": False,
+            "manager_id": 999,  # R11: does not exist in dataset
         },
-        expected_violations=["R5", "R9"],
+        expected_violations=["R5", "R9", "R11"],
     ),
     # RS005: Employee 52h, no OT approval (R7) + salary 82000 > employee max 80000 (R3)
     # After POLICY_UPDATE (threshold→40), R7 still applies since 52 > 40
@@ -881,6 +883,7 @@ _REGULATORY_STORM_RECORDS: List[RecordTruth] = [
     ),
     # RS010: Data engineer with PII access + no consent (R9) +
     #         salary 115000 > data_engineer max 110000 (R3)
+    #         manager_id=888 → R11 (does not exist in this dataset)
     RecordTruth(
         record_id="RS010",
         fields={
@@ -889,8 +892,9 @@ _REGULATORY_STORM_RECORDS: List[RecordTruth] = [
             "contract_end": "2025-06-01", "background_check": True,
             "overtime_approved": True, "compliance_training": True,
             "pii_access": True, "gdpr_consent": False,
+            "manager_id": 888,  # R11: does not exist in dataset
         },
-        expected_violations=["R3", "R9"],
+        expected_violations=["R3", "R9", "R11"],
     ),
     # RS011: 54 hours, no OT approval (R7); note: after POLICY_UPDATE this still fires
     RecordTruth(
@@ -1351,20 +1355,18 @@ TASKS: Dict[str, TaskDefinition] = {
         title="Regulatory Storm: Multi-Domain Stress-Test Audit",
         difficulty="extreme",
         objective=(
-            "Extreme stress-test audit across 25 records covering all 10 compliance rules "
-            "simultaneously. Three simultaneous constraint conflicts: (1) duplicate-ID groups "
-            "across three different ID values, (2) records with overlapping GDPR + overtime "
-            "violations where resolving the evidence for one reveals the other, and (3) missing "
-            "fields at varying severity levels triggering R10. Mid-episode dynamic events fire: "
-            "a POLICY_UPDATE lowers the overtime threshold from 48 to 40 h (requiring re-evaluation "
-            "of all records with 41-47 hours), SYSTEM_OUTAGE blocks two records for multiple steps, "
-            "and two RECORD_AMENDMENTs correct violations that were valid before the amendment. "
-            "An agent that memorises static task data will fail — correct answers depend on the "
-            "seed-dependent event schedule. Score ≥ 0.50 requires zero false positives and "
-            "≥ 50% detection. Score 1.0 requires full detection + zero false positives + efficient coverage."
+            "Extreme stress-test audit across 25 records covering all 11 compliance rules "
+            "simultaneously. Challenges include: (1) three simultaneous duplicate-ID groups, "
+            "(2) records with overlapping GDPR + overtime violations, (3) missing fields (R10), "
+            "(4) broken manager_id references (R11) requiring cross-record reasoning — the agent "
+            "must track all employee IDs while auditing to detect orphan manager references, "
+            "and (5) mid-episode dynamic events: POLICY_UPDATE lowers overtime threshold 48→40 h, "
+            "SYSTEM_OUTAGE blocks two records, two RECORD_AMENDMENTs correct violations. "
+            "Score >= 0.50 requires zero false positives and >= 50% detection. "
+            "Score 1.0 requires full detection + zero false positives + efficient coverage."
         ),
         max_steps=120,
-        active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10"],
+        active_rule_ids=["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9", "R10", "R11"],
         records=_REGULATORY_STORM_RECORDS,
     ),
     "streaming_long_horizon": TaskDefinition(
