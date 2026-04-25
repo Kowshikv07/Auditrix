@@ -12,7 +12,7 @@ requests==2.31.0
 # Training / RL stack
 torch
 transformers
-datasets
+datasets>=2.21.0,<3.0.0
 peft
 accelerate
 trl>=0.18.0
