@@ -34,8 +34,9 @@ def _render_rows_table(rows: list[dict]) -> str:
 
     header = (
         "<tr>"
-        "<th>#</th><th>Prompt</th><th>Completion</th><th>reward_from_env</th>"
-        "<th>reward_format</th><th>reward_coverage</th><th>Advantage</th>"
+        "<th>#</th><th>Prompt</th><th>Completion</th><th>reward_f1</th>"
+        "<th>reward_format</th><th>reward_detection</th><th>reward_precision</th>"
+        "<th>reward_workflow</th><th>reward_coverage</th><th>Advantage</th>"
         "</tr>"
     )
     body_rows = []
@@ -45,8 +46,11 @@ def _render_rows_table(rows: list[dict]) -> str:
             f"<td>{i}</td>"
             f"<td>{escape(str(row.get('prompt', '')))}</td>"
             f"<td>{escape(str(row.get('completion', '')))}</td>"
-            f"<td>{float(row.get('reward_from_env', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_f1', 0.0)):.4f}</td>"
             f"<td>{float(row.get('reward_format', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_detection', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_precision', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_workflow', 0.0)):.4f}</td>"
             f"<td>{float(row.get('reward_coverage', 0.0)):.4f}</td>"
             f"<td>{float(row.get('advantage', 0.0)):+.4f}</td>"
             "</tr>"
@@ -152,6 +156,7 @@ STRATEGY:
   5. generate_report when done or steps are running low
 
 All employee record fields are already revealed below.
+Even with revealed fields, include inspect_record actions first for each record to match environment workflow.
 Analyze every record against every active rule, then output ONE JSON object only.
 No prose. No markdown fences. Raw JSON only.
 
@@ -313,6 +318,111 @@ def _normalize_output(output: dict) -> dict:
 _RID_KEYS  = ("record_id", "employee_id", "id", "emp_id", "employee", "record")
 _RULE_KEYS = ("rule_id", "rule", "rule_name", "violation_rule",
               "violated_rule", "violated_rule_id", "ruleid")
+_VALID_ACTIONS = {
+    "inspect_record",
+    "apply_rule",
+    "request_evidence",
+    "flag_violation",
+    "retract_flag",
+    "mark_compliant",
+    "prioritize_rules",
+    "generate_report",
+    "finish",
+}
+
+
+def _extract_actions(output: dict) -> list[dict]:
+    actions = output.get("actions") if isinstance(output, dict) else None
+    if not isinstance(actions, list):
+        return []
+    return [a for a in actions if isinstance(a, dict)]
+
+
+def _format_score(output: dict) -> float:
+    """Strict format quality score in [0, 1]."""
+    if not isinstance(output, dict):
+        return 0.0
+
+    has_actions = isinstance(output.get("actions"), list)
+    has_violations = isinstance(output.get("violations"), list)
+    has_compliant = isinstance(output.get("compliant_records"), list)
+    has_summary = isinstance(output.get("summary"), str) and bool(output.get("summary", "").strip())
+
+    if not (has_actions and has_violations and has_compliant and has_summary):
+        return 0.0
+
+    for v in output.get("violations", []):
+        if not isinstance(v, dict):
+            return 0.0
+        if not all(k in v for k in ("record_id", "rule_id", "reason")):
+            return 0.0
+    return 1.0
+
+
+def _workflow_score(output: dict, task_id: str) -> float:
+    """Score action sequence quality against environment constraints in [0, 1]."""
+    actions = _extract_actions(output)
+    if not actions:
+        return 0.0
+
+    task = TASKS[task_id]
+    valid_records = {r.record_id for r in task.records}
+    valid_rules = set(task.active_rule_ids)
+    inspected: set[str] = set()
+
+    checks = 0
+    violations = 0
+    saw_prioritize = False
+
+    for i, action in enumerate(actions):
+        checks += 1
+        action_type = action.get("action_type")
+        if action_type not in _VALID_ACTIONS:
+            violations += 1
+            continue
+
+        if action_type == "prioritize_rules":
+            saw_prioritize = True
+            order = action.get("rule_priority_order")
+            if not isinstance(order, list) or not order:
+                violations += 1
+            elif any((not isinstance(rid, str)) or (rid not in valid_rules) for rid in order):
+                violations += 1
+            if i != 0:
+                violations += 1
+            continue
+
+        needs_record = action_type in {
+            "inspect_record", "apply_rule", "request_evidence",
+            "flag_violation", "retract_flag", "mark_compliant"
+        }
+        record_id = action.get("record_id")
+        if needs_record:
+            if not isinstance(record_id, str) or record_id not in valid_records:
+                violations += 1
+                continue
+
+        if action_type == "inspect_record":
+            inspected.add(record_id)
+            continue
+
+        if action_type in {"apply_rule", "request_evidence", "flag_violation", "retract_flag"}:
+            rule_id = action.get("rule_id")
+            if not isinstance(rule_id, str) or rule_id not in valid_rules:
+                violations += 1
+            if record_id not in inspected:
+                violations += 1
+            continue
+
+        if action_type == "mark_compliant":
+            if record_id not in inspected:
+                violations += 1
+            continue
+
+    score = max(0.0, 1.0 - (violations / max(checks, 1)))
+    if saw_prioritize:
+        score = min(1.0, score + 0.1)
+    return score
 
 def _extract_violations(output: dict) -> set[tuple[str, str]]:
     predicted = set()
@@ -357,6 +467,10 @@ def reward_f1(completions, prompts, task_id, **kwargs) -> list[float]:
         _LAST_BATCH.append({
             "prompt"    : prompt[-1]["content"][:120].replace("\n", " ") + "…",
             "completion": text[:200].replace("\n", " ") + "…",
+            "task_id"   : tid,
+            "parsed"    : parsed,
+            "detection" : round(det, 3),
+            "precision" : round(prec, 3),
             "f1"        : round(f1,       3),
             "coverage"  : round(coverage, 3),
         })
@@ -367,13 +481,8 @@ def reward_format(completions, prompts, **kwargs) -> list[float]:
     scores = []
     for completion in completions:
         text = completion[0]["content"] if isinstance(completion, list) else str(completion)
-        out  = _normalize_output(_parse_output(text))
-        ok   = (
-            isinstance(out.get("violations"), list)
-            and isinstance(out.get("compliant_records"), list)
-            and isinstance(out.get("summary"), str)
-        )
-        scores.append(0.1 if ok else 0.0)
+        out  = _parse_output(text)
+        scores.append(0.1 * _format_score(out))
     return scores
 
 def reward_detection(completions, prompts, task_id, **kwargs) -> list[float]:
@@ -392,6 +501,15 @@ def reward_precision(completions, prompts, task_id, **kwargs) -> list[float]:
         scores.append(float(prec) * 0.4)
     return scores
 
+
+def reward_workflow(completions, prompts, task_id, **kwargs) -> list[float]:
+    scores = []
+    for completion, tid in zip(completions, task_id):
+        text = completion[0]["content"] if isinstance(completion, list) else str(completion)
+        workflow = _workflow_score(_parse_output(text), tid)
+        scores.append(float(workflow) * 0.25)
+    return scores
+
 # ── Clean logging callback ────────────────────────────────────────────────────
 class AuditLogCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -406,36 +524,46 @@ class AuditLogCallback(TrainerCallback):
         print(f"\n{'═'*72}")
         print(f"Step {step:>4}/{args.max_steps}  |  reward_from_env={reward:.4f}")
         print(f"{'─'*72}")
-        print("| # | reward_from_env | reward_format | reward_coverage | Advantage |")
-        print("|---|-----------------|---------------|-----------------|-----------|")
+        print("| # | reward_f1 | reward_format | reward_detection | reward_precision | reward_workflow | reward_coverage | Advantage |")
+        print("|---|-----------|---------------|------------------|------------------|-----------------|-----------------|-----------|")
 
         batch_mean = sum(e["f1"] for e in _LAST_BATCH) / len(_LAST_BATCH) if _LAST_BATCH else 0.0
         rows = []
 
         for i, entry in enumerate(_LAST_BATCH):
             advantage  = entry["f1"] - batch_mean
-            reward_format = 0.1 if entry["f1"] > 0 else 0.0
+            parsed = entry.get("parsed") or {}
+            reward_format = 0.1 * _format_score(parsed)
+            reward_detection = float(entry.get("detection", 0.0)) * 0.6
+            reward_precision = float(entry.get("precision", 0.0)) * 0.4
+            reward_workflow = float(_workflow_score(parsed, entry.get("task_id", TRAIN_TASKS[0]))) * 0.25
 
             rows.append(
                 {
                     "prompt": entry["prompt"],
                     "completion": entry["completion"],
-                    "reward_from_env": entry["f1"],
+                    "reward_f1": entry["f1"],
                     "reward_format": reward_format,
+                    "reward_detection": reward_detection,
+                    "reward_precision": reward_precision,
+                    "reward_workflow": reward_workflow,
                     "reward_coverage": entry["coverage"],
                     "advantage": advantage,
                 }
             )
 
             print(
-                f"| {i+1} | {entry['f1']:.4f} | {reward_format:.4f} | "
-                f"{entry['coverage']:.4f} | {advantage:+.4f} |"
+                f"| {i+1} | {entry['f1']:.4f} | {reward_format:.4f} | {reward_detection:.4f} | "
+                f"{reward_precision:.4f} | {reward_workflow:.4f} | {entry['coverage']:.4f} | {advantage:+.4f} |"
             )
 
             print(f"  [{i+1}] Prompt    : {entry['prompt']}")
             print(f"       Completion: {entry['completion']}")
-            print(f"       reward_from_env={entry['f1']:.4f} | "
+            print(f"       reward_f1={entry['f1']:.4f} | "
                   f"reward_format={reward_format:.1f} | "
+                f"reward_detection={reward_detection:.4f} | "
+                f"reward_precision={reward_precision:.4f} | "
+                f"reward_workflow={reward_workflow:.4f} | "
                   f"reward_coverage={entry['coverage']:.4f} | "
                   f"Advantage={advantage:+.4f}")
             print()
@@ -519,7 +647,7 @@ def train():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[reward_f1, reward_format, reward_detection, reward_precision],
+        reward_funcs=[reward_f1, reward_format, reward_detection, reward_precision, reward_workflow],
         args=config,
         train_dataset=dataset,
         callbacks=[AuditLogCallback()],
