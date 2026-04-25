@@ -110,7 +110,7 @@ from transformers import (
     AutoModelForCausalLM, AutoTokenizer,
     BitsAndBytesConfig, TrainerCallback
 )
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from trl import GRPOConfig, GRPOTrainer
 from datasets import Dataset
 
@@ -685,13 +685,15 @@ def load_model():
         device_map="auto", token=HF_TOKEN, trust_remote_code=True)
     model.config.use_cache = False
 
+    # Required for stable QLoRA backprop in 4-bit mode.
+    model = prepare_model_for_kbit_training(model, use_gradient_checkpointing=True)
+
     model = get_peft_model(model, LoraConfig(
         r=LORA_RANK, lora_alpha=LORA_RANK * 2,
         target_modules=["q_proj","k_proj","v_proj","o_proj",
                         "gate_proj","up_proj","down_proj"],
         lora_dropout=0.05, bias="none", task_type=TaskType.CAUSAL_LM,
     ))
-    model.gradient_checkpointing_enable()
     model.print_trainable_parameters()
     return model, tokenizer
 
