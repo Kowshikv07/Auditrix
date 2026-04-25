@@ -36,7 +36,7 @@ def _render_rows_table(rows: list[dict]) -> str:
         "<tr>"
         "<th>#</th><th>Prompt</th><th>Completion</th><th>reward_f1</th>"
         "<th>reward_format</th><th>reward_detection</th><th>reward_precision</th>"
-        "<th>reward_workflow</th><th>reward_coverage</th><th>Advantage</th>"
+        "<th>reward_workflow</th><th>reward_inspect_coverage</th><th>reward_coverage</th><th>Advantage</th>"
         "</tr>"
     )
     body_rows = []
@@ -51,6 +51,7 @@ def _render_rows_table(rows: list[dict]) -> str:
             f"<td>{float(row.get('reward_detection', 0.0)):.4f}</td>"
             f"<td>{float(row.get('reward_precision', 0.0)):.4f}</td>"
             f"<td>{float(row.get('reward_workflow', 0.0)):.4f}</td>"
+            f"<td>{float(row.get('reward_inspect_coverage', 0.0)):.4f}</td>"
             f"<td>{float(row.get('reward_coverage', 0.0)):.4f}</td>"
             f"<td>{float(row.get('advantage', 0.0)):+.4f}</td>"
             "</tr>"
@@ -419,6 +420,11 @@ def _workflow_score(output: dict, task_id: str) -> float:
                 violations += 1
             continue
 
+        if action_type in {"generate_report", "finish"}:
+            if len(inspected) < len(valid_records):
+                violations += 1
+            continue
+
     score = max(0.0, 1.0 - (violations / max(checks, 1)))
     if saw_prioritize:
         score = min(1.0, score + 0.1)
@@ -510,6 +516,44 @@ def reward_workflow(completions, prompts, task_id, **kwargs) -> list[float]:
         scores.append(float(workflow) * 0.25)
     return scores
 
+
+def _inspect_coverage_score(output: dict, task_id: str) -> float:
+    """Score inspection coverage in [0, 1], strict before terminal actions.
+
+    If generate_report/finish is present, all records should be inspected at least once.
+    """
+    actions = _extract_actions(output)
+    if not actions:
+        return 0.0
+
+    task = TASKS[task_id]
+    valid_records = {r.record_id for r in task.records}
+    if not valid_records:
+        return 1.0
+
+    inspected = {
+        a.get("record_id")
+        for a in actions
+        if a.get("action_type") == "inspect_record" and isinstance(a.get("record_id"), str)
+    }
+    inspected = {rid for rid in inspected if rid in valid_records}
+
+    coverage = len(inspected) / len(valid_records)
+    has_terminal = any(a.get("action_type") in {"generate_report", "finish"} for a in actions)
+
+    if has_terminal:
+        return 1.0 if coverage >= 1.0 else 0.0
+    return coverage
+
+
+def reward_inspect_coverage(completions, prompts, task_id, **kwargs) -> list[float]:
+    scores = []
+    for completion, tid in zip(completions, task_id):
+        text = completion[0]["content"] if isinstance(completion, list) else str(completion)
+        score = _inspect_coverage_score(_parse_output(text), tid)
+        scores.append(float(score) * 0.20)
+    return scores
+
 # ── Clean logging callback ────────────────────────────────────────────────────
 class AuditLogCallback(TrainerCallback):
     def on_log(self, args, state, control, logs=None, **kwargs):
@@ -524,8 +568,8 @@ class AuditLogCallback(TrainerCallback):
         print(f"\n{'═'*72}")
         print(f"Step {step:>4}/{args.max_steps}  |  reward_from_env={reward:.4f}")
         print(f"{'─'*72}")
-        print("| # | reward_f1 | reward_format | reward_detection | reward_precision | reward_workflow | reward_coverage | Advantage |")
-        print("|---|-----------|---------------|------------------|------------------|-----------------|-----------------|-----------|")
+        print("| # | reward_f1 | reward_format | reward_detection | reward_precision | reward_workflow | reward_inspect_coverage | reward_coverage | Advantage |")
+        print("|---|-----------|---------------|------------------|------------------|-----------------|-------------------------|-----------------|-----------|")
 
         batch_mean = sum(e["f1"] for e in _LAST_BATCH) / len(_LAST_BATCH) if _LAST_BATCH else 0.0
         rows = []
@@ -537,6 +581,7 @@ class AuditLogCallback(TrainerCallback):
             reward_detection = float(entry.get("detection", 0.0)) * 0.6
             reward_precision = float(entry.get("precision", 0.0)) * 0.4
             reward_workflow = float(_workflow_score(parsed, entry.get("task_id", TRAIN_TASKS[0]))) * 0.25
+            reward_inspect_coverage = float(_inspect_coverage_score(parsed, entry.get("task_id", TRAIN_TASKS[0]))) * 0.20
 
             rows.append(
                 {
@@ -547,6 +592,7 @@ class AuditLogCallback(TrainerCallback):
                     "reward_detection": reward_detection,
                     "reward_precision": reward_precision,
                     "reward_workflow": reward_workflow,
+                    "reward_inspect_coverage": reward_inspect_coverage,
                     "reward_coverage": entry["coverage"],
                     "advantage": advantage,
                 }
@@ -554,7 +600,7 @@ class AuditLogCallback(TrainerCallback):
 
             print(
                 f"| {i+1} | {entry['f1']:.4f} | {reward_format:.4f} | {reward_detection:.4f} | "
-                f"{reward_precision:.4f} | {reward_workflow:.4f} | {entry['coverage']:.4f} | {advantage:+.4f} |"
+                f"{reward_precision:.4f} | {reward_workflow:.4f} | {reward_inspect_coverage:.4f} | {entry['coverage']:.4f} | {advantage:+.4f} |"
             )
 
             print(f"  [{i+1}] Prompt    : {entry['prompt']}")
@@ -564,6 +610,7 @@ class AuditLogCallback(TrainerCallback):
                 f"reward_detection={reward_detection:.4f} | "
                 f"reward_precision={reward_precision:.4f} | "
                 f"reward_workflow={reward_workflow:.4f} | "
+                f"reward_inspect_coverage={reward_inspect_coverage:.4f} | "
                   f"reward_coverage={entry['coverage']:.4f} | "
                   f"Advantage={advantage:+.4f}")
             print()
@@ -647,7 +694,14 @@ def train():
     trainer = GRPOTrainer(
         model=model,
         processing_class=tokenizer,
-        reward_funcs=[reward_f1, reward_format, reward_detection, reward_precision, reward_workflow],
+        reward_funcs=[
+            reward_f1,
+            reward_format,
+            reward_detection,
+            reward_precision,
+            reward_workflow,
+            reward_inspect_coverage,
+        ],
         args=config,
         train_dataset=dataset,
         callbacks=[AuditLogCallback()],
