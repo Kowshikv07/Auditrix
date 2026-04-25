@@ -14,8 +14,6 @@ Episode flow
 4. Agent calls mark_compliant(record_id)           → declares no violations; +0.05 if right
 generate_report or finish       → episode ends; terminal grader score applied
 
-Additions (Glacio-inspired improvements)
--------------------------------------------
 • Dynamic incident mechanics: EventScheduler injects POLICY_UPDATE / SYSTEM_OUTAGE /
   RECORD_AMENDMENT events mid-episode per (task_id, seed).
 • Structured explainability: every apply_rule and flag_violation returns a DecisionTrace
@@ -46,7 +44,7 @@ from .models import (
     StepResult,
     ViolationEntry,
 )
-from .rules import RULES, rule_info
+from .rules import RULES, VIOLATION_SEVERITY, SEVERITY_WEIGHTS, rule_info
 from .tasks import TASKS, list_task_ids
 
 # Anti-exploit window size
@@ -114,7 +112,9 @@ class ComplianceAuditEnv:
             policy_overrides={},
             recent_action_window=[],
             loop_penalty_applied=0,
+            suspended_rule_ids=[],
         )
+        self._suspended_rule_expiry: Dict[str, int] = {}
         self._last_action_sig = None
         self._episode_seed = resolved_seed
         return self._build_observation()
@@ -147,6 +147,8 @@ class ComplianceAuditEnv:
             event_schedule=self._state.event_schedule,
             records=self._state.records,  # type: ignore[arg-type]
             policy_overrides=self._state.policy_overrides,
+            suspended_rule_ids=self._state.suspended_rule_ids,
+            suspended_rule_expiry=self._suspended_rule_expiry,
         )
 
         # ── Anti-exploit: track action signature in sliding window ────────
@@ -290,7 +292,6 @@ class ComplianceAuditEnv:
         if action.action_type == ActionType.PRIORITIZE_RULES:
             if not action.rule_priority_order:
                 raise ValueError("rule_priority_order is required for prioritize_rules action.")
-            # Validate that all active rules are present in the priority order
             provided_rules = set(action.rule_priority_order)
             active_rules = set(self._state.active_rule_ids)
             if provided_rules != active_rules:
@@ -330,9 +331,6 @@ class ComplianceAuditEnv:
                 components["inspect_repeat"] = -0.02
                 return -0.02, components
             record.inspected = True
-            # Streaming: tiny shaped reward to encourage record exploration.
-            # Small enough to keep long-horizon sparse character; large enough
-            # to give untrained models a signal to keep moving forward.
             inspect_reward = 0.01 if self._state.difficulty == "streaming" else 0.06
             components["inspect_new"] = inspect_reward
             return inspect_reward, components
@@ -347,67 +345,99 @@ class ComplianceAuditEnv:
         if action.action_type == ActionType.APPLY_RULE:
             if not action.rule_id:
                 raise ValueError("rule_id is required for apply_rule.")
-            if action.rule_id not in self._state.active_rule_ids:
+            active = [r for r in self._state.active_rule_ids if r not in self._state.suspended_rule_ids]
+            if action.rule_id not in active:
                 raise ValueError(
-                    f"Rule {action.rule_id!r} is not active in this task. "
-                    f"Active rules: {self._state.active_rule_ids}"
+                    f"Rule {action.rule_id!r} is not active (or suspended) in this task. "
+                    f"Active rules: {active}"
                 )
             if action.rule_id in record.rules_applied:
                 self._state.penalties += 0.05
                 components["rule_repeat"] = -0.05
                 return -0.05, components
 
-            # Run the rule engine with evidence + policy overrides
             rule = RULES[action.rule_id]
             all_fields = [r.fields for r in self._state.records.values()]
             policy_override = self._state.policy_overrides.get(action.rule_id)
 
-            is_violation, reason_codes, evidence = rule.evaluate_with_evidence(
+            verdict, confidence, reason_codes, evidence = rule.evaluate_with_confidence(
                 record.fields, all_fields, policy_override
             )
+            is_violation = (verdict == "violation")
 
             if action.rule_id not in record.rules_applied:
                 record.rules_applied.append(action.rule_id)
+
+            # Track warning calls for grader
+            if verdict == "warning":
+                key = f"{action.record_id}:{action.rule_id}"
+                if key not in self._state.warning_calls:
+                    self._state.warning_calls.append(key)
 
             self._state.last_decision_trace = DecisionTrace(
                 action_type=ActionType.APPLY_RULE.value,
                 record_id=action.record_id,
                 rule_id=action.rule_id,
-                outcome="violation_detected" if is_violation else "no_violation",
+                outcome="violation_detected" if is_violation else ("warning" if verdict == "warning" else "no_violation"),
+                verdict=verdict,
+                confidence_tier=confidence,
                 reason_codes=reason_codes,
                 rule_evidence=evidence,
             )
 
             if is_violation:
-                # apply_rule stays fully sparse in streaming — the model
-                # must flag to get any meaningful signal.
                 rule_reward = 0.0 if self._state.difficulty == "streaming" else 0.20
                 components["rule_hit"] = rule_reward
                 return rule_reward, components
             components["rule_no_hit"] = 0.0
             return 0.0, components
 
+        # ── request_evidence ─────────────────────────────────────────
+        if action.action_type == ActionType.REQUEST_EVIDENCE:
+            if not action.rule_id:
+                raise ValueError("rule_id is required for request_evidence.")
+            active = [r for r in self._state.active_rule_ids if r not in self._state.suspended_rule_ids]
+            if action.rule_id not in active:
+                raise ValueError(f"Rule {action.rule_id!r} is not active in this task.")
+
+            rule = RULES[action.rule_id]
+            all_fields = [r.fields for r in self._state.records.values()]
+            policy_override = self._state.policy_overrides.get(action.rule_id)
+            verdict, confidence, reason_codes, evidence = rule.evaluate_with_confidence(
+                record.fields, all_fields, policy_override
+            )
+
+            if verdict == "warning":
+                key = f"{action.record_id}:{action.rule_id}"
+                if key not in self._state.warning_calls:
+                    self._state.warning_calls.append(key)
+
+            self._state.last_decision_trace = DecisionTrace(
+                action_type=ActionType.REQUEST_EVIDENCE.value,
+                record_id=action.record_id,
+                rule_id=action.rule_id,
+                outcome=f"evidence_returned:{verdict}",
+                verdict=verdict,
+                confidence_tier=confidence,
+                reason_codes=reason_codes,
+                rule_evidence=evidence,
+            )
+            # Free action: costs one step, no reward or penalty
+            components["evidence_requested"] = 0.0
+            return 0.0, components
+
         # ── flag_violation ────────────────────────────────────────────
         if action.action_type == ActionType.FLAG_VIOLATION:
             if not action.rule_id:
                 raise ValueError("rule_id is required for flag_violation.")
-            if action.rule_id not in self._state.active_rule_ids:
-                raise ValueError(f"Rule {action.rule_id!r} is not active in this task.")
+            active = [r for r in self._state.active_rule_ids if r not in self._state.suspended_rule_ids]
+            if action.rule_id not in active:
+                raise ValueError(f"Rule {action.rule_id!r} is not active (or suspended) in this task.")
             if action.rule_id in record.flagged_violations:
                 self._state.penalties += 0.05
                 components["flag_duplicate"] = -0.05
                 return -0.05, components
 
-
-            # ── Live rule evaluation (source of truth) ────────────────────
-            # Evaluate the rule RIGHT NOW using current policy_overrides.
-            # This correctly handles two cases:
-            #   1. POLICY_UPDATE created a new violation (e.g. overtime 48→40):
-            #      The static expected_violations doesn't include this, but the
-            #      live evaluation returns True → agent is rewarded correctly.
-            #   2. RECORD_AMENDMENT resolved a violation:
-            #      The static expected_violations still lists it, but the live
-            #      evaluation returns False → flagging is now a false positive.
             rule = RULES[action.rule_id]
             all_fields = [r.fields for r in self._state.records.values()]
             policy_override = self._state.policy_overrides.get(action.rule_id)
@@ -423,22 +453,58 @@ class ComplianceAuditEnv:
                 record_id=action.record_id,
                 rule_id=action.rule_id,
                 outcome="flag_correct" if is_true_violation else "flag_false_positive",
+                verdict="violation" if is_true_violation else "compliant",
+                confidence_tier="high",
                 reason_codes=self._reason_codes_for_flag(is_true_violation),
                 rule_evidence=self._build_flag_evidence(action.record_id, action.rule_id, is_true_violation),
             )
 
             if is_true_violation:
-                # Streaming: modest positive signal so model learns flagging is
-                # the goal — much less than other tasks to keep sparse character.
                 flag_reward = 0.05 if self._state.difficulty == "streaming" else 0.50
+                # ── Prioritization bonus ──────────────────────────────
+                priority_bonus = self._compute_priority_bonus(action.rule_id)
+                flag_reward += priority_bonus
                 components["flag_correct"] = flag_reward
+                if priority_bonus != 0:
+                    components["priority_bonus"] = priority_bonus
                 return flag_reward, components
+
             self._state.penalties += 0.15
-            # Streaming: negative signal on FP so model learns not to guess.
             fp_reward = -0.10 if self._state.difficulty == "streaming" else -0.30
-            components["flag_false_positive"] = fp_reward
+            # ── Half-penalty for warning cases ────────────────────────
+            warning_key = f"{action.record_id}:{action.rule_id}"
+            if warning_key in self._state.warning_calls:
+                fp_reward = fp_reward / 2  # agent was warned it was ambiguous
+                components["warning_fp_half_penalty"] = fp_reward
+            else:
+                components["flag_false_positive"] = fp_reward
             return fp_reward, components
 
+        # ── retract_flag ──────────────────────────────────────────────
+        if action.action_type == ActionType.RETRACT_FLAG:
+            if not action.rule_id:
+                raise ValueError("rule_id is required for retract_flag.")
+            if action.rule_id not in record.flagged_violations:
+                raise ValueError(
+                    f"Cannot retract: rule {action.rule_id!r} is not flagged on {action.record_id!r}."
+                )
+            # Was this flag actually correct?
+            rule = RULES[action.rule_id]
+            all_fields = [r.fields for r in self._state.records.values()]
+            policy_override = self._state.policy_overrides.get(action.rule_id)
+            still_violation, _, _ = rule.evaluate_with_evidence(
+                record.fields, all_fields, policy_override
+            )
+            record.flagged_violations.remove(action.rule_id)
+            if still_violation:
+                # Retracting a correct flag — stronger penalty
+                retract_reward = -0.20
+                components["retract_correct_flag"] = retract_reward
+            else:
+                # Retracting a false positive — light penalty (correct behaviour)
+                retract_reward = -0.10
+                components["retract_false_positive"] = retract_reward
+            return retract_reward, components
         # ── mark_compliant ────────────────────────────────────────────
         if action.action_type == ActionType.MARK_COMPLIANT:
             if record.marked_compliant:
@@ -446,9 +512,9 @@ class ComplianceAuditEnv:
                 components["compliant_repeat"] = -0.02
                 return -0.02, components
             record.marked_compliant = True
-            has_real_violations = bool(record.expected_violations)
+            # Use live evaluation (not static expected_violations) — handles amendments
+            has_real_violations = bool(self._live_true_violations_for_record(record))
             if not has_real_violations:
-                # mark_compliant stays sparse in streaming.
                 compliant_reward = 0.0 if self._state.difficulty == "streaming" else 0.05
                 components["compliant_correct"] = compliant_reward
                 return compliant_reward, components
@@ -504,6 +570,7 @@ class ComplianceAuditEnv:
                         description=RULES[rule_id].description
                         if rule_id in RULES
                         else rule_id,
+                        severity=VIOLATION_SEVERITY.get(rule_id, "medium"),
                     )
                 )
 
@@ -559,6 +626,68 @@ class ComplianceAuditEnv:
             "expected_violation": is_true_violation,
             "already_flagged_for_record": list(record.flagged_violations),
         }
+
+    def _live_true_violations_for_record(self, record: Any) -> List[str]:
+        """Return rule_ids that are currently violated by this record (live eval)."""
+        assert self._state is not None
+        violations = []
+        all_fields = [r.fields for r in self._state.records.values()]
+        active = [r for r in self._state.active_rule_ids if r not in self._state.suspended_rule_ids]
+        for rule_id in active:
+            if rule_id not in RULES:
+                continue
+            override = self._state.policy_overrides.get(rule_id)
+            is_viol, _, _ = RULES[rule_id].evaluate_with_evidence(record.fields, all_fields, override)
+            if is_viol:
+                violations.append(rule_id)
+        return violations
+
+    def _compute_priority_bonus(self, rule_id: str) -> float:
+        """Return a small bonus/penalty based on whether the flagged rule aligns with priority order.
+
+        If the agent declared a priority order and is flagging a high-severity rule
+        before lower-severity ones are exhausted, reward it. If flagging low-severity
+        while critical violations remain unflagged, apply a small penalty.
+        """
+        assert self._state is not None
+        if not self._state.rule_priority_set or not self._state.rule_priority_order:
+            return 0.0
+
+        severity = VIOLATION_SEVERITY.get(rule_id, "medium")
+        priority_list = self._state.rule_priority_order
+
+        # Find position of this rule in the agent's declared priority
+        try:
+            rule_pos = priority_list.index(rule_id)
+        except ValueError:
+            return 0.0
+
+        # Check if any CRITICAL unflagged violations remain
+        all_fields = [r.fields for r in self._state.records.values()]
+        critical_unflagged = False
+        for rec in self._state.records.values():
+            if not rec.inspected:
+                continue
+            for rid in self._state.active_rule_ids:
+                if VIOLATION_SEVERITY.get(rid) == "critical" and rid not in rec.flagged_violations:
+                    override = self._state.policy_overrides.get(rid)
+                    is_v, _, _ = RULES[rid].evaluate_with_evidence(rec.fields, all_fields, override)
+                    if is_v:
+                        critical_unflagged = True
+                        break
+            if critical_unflagged:
+                break
+
+        # If flagging a low-severity rule while critical violations exist → small penalty
+        if critical_unflagged and severity == "low":
+            return -0.05
+
+        # If flagging a high/critical severity rule in the top half of priority → small bonus
+        midpoint = len(priority_list) // 2
+        if rule_pos <= midpoint and severity in ("critical", "high"):
+            return 0.05
+
+        return 0.0
 
     def _report_consistency_penalty(self, report: Dict[str, Any]) -> float:
         """Compute a penalty when the report's flagged_violations contradicts actual state.

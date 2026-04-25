@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from typing import Dict, Set, Tuple
 
 from .models import AuditState, FailureMode
-from .rules import RULES
+from .rules import RULES, VIOLATION_SEVERITY, SEVERITY_WEIGHTS
 
 
 @dataclass(frozen=True)
@@ -78,8 +78,8 @@ def _classify_failure_mode(
 class BaseAuditGrader:
     """Compute a normalized [0, 1] score from the terminal episode state."""
 
-    # Weights: (correct_violations, false_positive, coverage, efficiency)
-    WEIGHTS: Tuple[float, float, float, float] = (0.5, 0.2, 0.2, 0.1)
+    # Weights: (severity_detection, precision, coverage, efficiency, prioritization)
+    WEIGHTS: Tuple[float, float, float, float, float] = (0.45, 0.20, 0.15, 0.10, 0.10)
 
     def _live_true_violations(self, state: AuditState) -> Set[Tuple[str, str]]:
         """Compute the ground-truth violation set by evaluating rules live.
@@ -91,8 +91,9 @@ class BaseAuditGrader:
         """
         all_fields = [r.fields for r in state.records.values()]
         true_violations: Set[Tuple[str, str]] = set()
+        active = [r for r in state.active_rule_ids if r not in state.suspended_rule_ids]
         for rec in state.records.values():
-            for rule_id in state.active_rule_ids:
+            for rule_id in active:
                 policy_override = state.policy_overrides.get(rule_id)
                 rule = RULES.get(rule_id)
                 if rule is None:
@@ -104,14 +105,85 @@ class BaseAuditGrader:
                     true_violations.add((rec.record_id, rule_id))
         return true_violations
 
+    def _severity_weighted_detection(self, flagged: Set, true_violations: Set) -> float:
+        """Detection rate weighted by violation severity.
+
+        A missed GDPR violation (weight=2.0) hurts more than a missed intern-hours
+        violation (weight=0.5). Agents that triage correctly score higher.
+        """
+        if not true_violations:
+            return 1.0
+        total_weight = sum(
+            SEVERITY_WEIGHTS.get(VIOLATION_SEVERITY.get(rid, "medium"), 1.0)
+            for (_, rid) in true_violations
+        )
+        correct_weight = sum(
+            SEVERITY_WEIGHTS.get(VIOLATION_SEVERITY.get(rid, "medium"), 1.0)
+            for (rec_id, rid) in (flagged & true_violations)
+        )
+        return correct_weight / total_weight if total_weight > 0 else 1.0
+
+    def _warning_credit(self, state: AuditState, true_violations: Set) -> float:
+        """Credit for correctly abstaining on warning-tier cases.
+
+        For each (record_id, rule_id) pair where apply_rule returned 'warning':
+        - If the agent did NOT flag it (correct restraint) → +0.05 credit per instance
+        - The total warning_credit is capped at 0.10
+        """
+        if not state.warning_calls:
+            return 0.0
+        credit = 0.0
+        for key in state.warning_calls:
+            parts = key.split(":", 1)
+            if len(parts) != 2:
+                continue
+            rec_id, rule_id = parts
+            rec = state.records.get(rec_id)
+            if rec is None:
+                continue
+            # If NOT flagged → agent correctly abstained on ambiguous case
+            if rule_id not in rec.flagged_violations:
+                credit += 0.05
+        return min(0.10, credit)
+
+    def _prioritization_score(self, state: AuditState, true_violations: Set) -> float:
+        """Score how well the agent's flagging order reflects violation severity.
+
+        Computes the correlation between flag order and severity weight.
+        Returns a value in [0, 1].
+        """
+        if not state.rule_priority_order or not true_violations:
+            return 0.5  # neutral if no priority declared
+
+        # Build expected order from severity (highest first)
+        priority_order = state.rule_priority_order
+        n = len(priority_order)
+        if n == 0:
+            return 0.5
+
+        # Score: proportion of correctly ordered critical-before-low pairs
+        correct_pairs = 0
+        total_pairs = 0
+        for i, r1 in enumerate(priority_order):
+            for r2 in priority_order[i + 1:]:
+                sev1 = SEVERITY_WEIGHTS.get(VIOLATION_SEVERITY.get(r1, "medium"), 1.0)
+                sev2 = SEVERITY_WEIGHTS.get(VIOLATION_SEVERITY.get(r2, "medium"), 1.0)
+                if sev1 != sev2:
+                    total_pairs += 1
+                    if sev1 > sev2:  # r1 higher severity listed before r2 lower severity
+                        correct_pairs += 1
+        if total_pairs == 0:
+            return 1.0  # all same severity — any order is fine
+        return correct_pairs / total_pairs
+
     def grade(self, state: AuditState) -> GradingBreakdown:
-        w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
+        w_det, w_fp, w_cov, w_eff, w_pri = self.WEIGHTS
 
         # ── ground truth (live — respects POLICY_UPDATE & RECORD_AMENDMENT) ─
         true_violations = self._live_true_violations(state)
         total_violations = len(true_violations)
 
-        # ── agent declarations ─────────────────────────────────────────────
+        # ── agent declarations ──────────────────────────────────────
         flagged: Set[Tuple[str, str]] = set()
         for rec in state.records.values():
             for rule_id in rec.flagged_violations:
@@ -121,10 +193,8 @@ class BaseAuditGrader:
         false_positives = len(flagged - true_violations)
         total_flagged = len(flagged)
 
-        # ── component scores ───────────────────────────────────────────────
-        detection_rate = (
-            correct_detected / total_violations if total_violations > 0 else 1.0
-        )
+        # ── component scores ───────────────────────────────────────
+        severity_detection = self._severity_weighted_detection(flagged, true_violations)
         false_positive_rate = (
             false_positives / total_flagged if total_flagged > 0 else 0.0
         )
@@ -136,14 +206,19 @@ class BaseAuditGrader:
             0.0, 1.0 - (state.step_count / state.max_steps)
         ) if state.max_steps > 0 else 0.0
 
+        warning_credit = self._warning_credit(state, true_violations)
+        prioritization = self._prioritization_score(state, true_violations)
+
         # Anti-exploit: loop penalty deduction
         loop_deduction = min(0.10, state.loop_penalty_applied * 0.02)
 
         score = (
-            w_viol * detection_rate
-            + w_fp   * (1.0 - false_positive_rate)
-            + w_cov  * coverage
-            + w_eff  * efficiency
+            w_det * severity_detection
+            + w_fp  * (1.0 - false_positive_rate)
+            + w_cov * coverage
+            + w_eff * efficiency
+            + w_pri * prioritization
+            + 0.05  * warning_credit  # bonus on top
             - loop_deduction
         )
 
@@ -151,22 +226,28 @@ class BaseAuditGrader:
         if coverage < 0.5:
             score = min(score, 0.5)
 
+        # Backward-compat: keep detection_rate as simple ratio for logging
+        detection_rate = correct_detected / total_violations if total_violations > 0 else 1.0
+
         # Failure mode classification
         failure_mode = _classify_failure_mode(
             state, detection_rate, false_positive_rate, coverage, efficiency
         )
 
         components = {
-            "detection_rate":      round(detection_rate, 4),
-            "false_positive_rate": round(false_positive_rate, 4),
-            "coverage":            round(coverage, 4),
-            "efficiency":          round(efficiency, 4),
-            "correct_detected":    correct_detected,
-            "total_violations":    total_violations,
-            "false_positives":     false_positives,
-            "records_checked":     records_checked,
-            "total_records":       total_records,
-            "loop_deduction":      round(loop_deduction, 4),
+            "severity_detection":   round(severity_detection, 4),
+            "detection_rate":       round(detection_rate, 4),
+            "false_positive_rate":  round(false_positive_rate, 4),
+            "coverage":             round(coverage, 4),
+            "efficiency":           round(efficiency, 4),
+            "prioritization_score": round(prioritization, 4),
+            "warning_credit":       round(warning_credit, 4),
+            "correct_detected":     correct_detected,
+            "total_violations":     total_violations,
+            "false_positives":      false_positives,
+            "records_checked":      records_checked,
+            "total_records":        total_records,
+            "loop_deduction":       round(loop_deduction, 4),
         }
         return GradingBreakdown(
             score=max(0.0, min(1.0, score)),
@@ -177,17 +258,17 @@ class BaseAuditGrader:
 
 class EasyAuditGrader(BaseAuditGrader):
     """Easy — reward correct detection heavily; coverage matters less."""
-    WEIGHTS = (0.55, 0.20, 0.15, 0.10)
+    WEIGHTS = (0.50, 0.20, 0.15, 0.10, 0.05)
 
 
 class MediumAuditGrader(BaseAuditGrader):
     """Medium — balanced between detection, precision, and coverage."""
-    WEIGHTS = (0.50, 0.20, 0.20, 0.10)
+    WEIGHTS = (0.45, 0.20, 0.20, 0.10, 0.05)
 
 
 class HardAuditGrader(BaseAuditGrader):
     """Hard — full spec weights; efficiency bonus is meaningful."""
-    WEIGHTS = (0.50, 0.20, 0.20, 0.10)
+    WEIGHTS = (0.45, 0.20, 0.15, 0.10, 0.10)
 
 
 class ExtremeAuditGrader(BaseAuditGrader):
@@ -210,12 +291,12 @@ class ExtremeAuditGrader(BaseAuditGrader):
     by a mid-episode RECORD_AMENDMENT.
     """
 
-    WEIGHTS = (0.55, 0.25, 0.15, 0.05)  # Detection + FP precision are paramount
+    WEIGHTS = (0.50, 0.25, 0.13, 0.05, 0.07)  # Detection + FP precision are paramount
 
     def grade(self, state: AuditState) -> GradingBreakdown:
-        w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
+        w_det, w_fp, w_cov, w_eff, w_pri = self.WEIGHTS
 
-        # Live ground truth — correctly handles both POLICY_UPDATE and RECORD_AMENDMENT.
+        # Live ground truth
         true_violations = self._live_true_violations(state)
         total_violations = len(true_violations)
 
@@ -228,28 +309,26 @@ class ExtremeAuditGrader(BaseAuditGrader):
         false_positives = len(flagged - true_violations)
         total_flagged = len(flagged)
 
-        detection_rate = (
-            correct_detected / total_violations if total_violations > 0 else 1.0
-        )
-        false_positive_rate = (
-            false_positives / total_flagged if total_flagged > 0 else 0.0
-        )
+        severity_detection = self._severity_weighted_detection(flagged, true_violations)
+        detection_rate = correct_detected / total_violations if total_violations > 0 else 1.0
+        false_positive_rate = false_positives / total_flagged if total_flagged > 0 else 0.0
         records_checked = sum(1 for r in state.records.values() if r.inspected)
         total_records = len(state.records) or 1
         coverage = records_checked / total_records
-
-        efficiency = max(
-            0.0, 1.0 - (state.step_count / state.max_steps)
-        ) if state.max_steps > 0 else 0.0
+        efficiency = max(0.0, 1.0 - (state.step_count / state.max_steps)) if state.max_steps > 0 else 0.0
+        prioritization = self._prioritization_score(state, true_violations)
+        warning_credit = self._warning_credit(state, true_violations)
 
         # More aggressive loop deduction for extreme difficulty
         loop_deduction = min(0.15, state.loop_penalty_applied * 0.03)
 
         score = (
-            w_viol * detection_rate
-            + w_fp   * (1.0 - false_positive_rate)
-            + w_cov  * coverage
-            + w_eff  * efficiency
+            w_det * severity_detection
+            + w_fp  * (1.0 - false_positive_rate)
+            + w_cov * coverage
+            + w_eff * efficiency
+            + w_pri * prioritization
+            + 0.05  * warning_credit
             - loop_deduction
         )
 
@@ -270,10 +349,13 @@ class ExtremeAuditGrader(BaseAuditGrader):
         )
 
         components = {
+            "severity_detection":   round(severity_detection, 4),
             "detection_rate":       round(detection_rate, 4),
             "false_positive_rate":  round(false_positive_rate, 4),
             "coverage":             round(coverage, 4),
             "efficiency":           round(efficiency, 4),
+            "prioritization_score": round(prioritization, 4),
+            "warning_credit":       round(warning_credit, 4),
             "correct_detected":     correct_detected,
             "total_violations":     total_violations,
             "false_positives":      false_positives,
@@ -309,10 +391,10 @@ class StreamingAuditGrader(BaseAuditGrader):
     via RECORD_AMENDMENT events test multi-step planning.
     """
 
-    WEIGHTS = (0.55, 0.25, 0.15, 0.05)
+    WEIGHTS = (0.50, 0.25, 0.15, 0.05, 0.05)
 
     def grade(self, state: AuditState) -> GradingBreakdown:
-        w_viol, w_fp, w_cov, w_eff = self.WEIGHTS
+        w_det, w_fp, w_cov, w_eff, w_pri = self.WEIGHTS
 
         # Live ground truth — correctly handles both POLICY_UPDATE and RECORD_AMENDMENT.
         true_violations = self._live_true_violations(state)
@@ -327,27 +409,25 @@ class StreamingAuditGrader(BaseAuditGrader):
         false_positives = len(flagged - true_violations)
         total_flagged = len(flagged)
 
-        detection_rate = (
-            correct_detected / total_violations if total_violations > 0 else 1.0
-        )
-        false_positive_rate = (
-            false_positives / total_flagged if total_flagged > 0 else 0.0
-        )
+        detection_rate = correct_detected / total_violations if total_violations > 0 else 1.0
+        false_positive_rate = false_positives / total_flagged if total_flagged > 0 else 0.0
         records_checked = sum(1 for r in state.records.values() if r.inspected)
         total_records = len(state.records) or 1
         coverage = records_checked / total_records
-
-        efficiency = max(
-            0.0, 1.0 - (state.step_count / state.max_steps)
-        ) if state.max_steps > 0 else 0.0
+        efficiency = max(0.0, 1.0 - (state.step_count / state.max_steps)) if state.max_steps > 0 else 0.0
+        severity_detection = self._severity_weighted_detection(flagged, true_violations)
+        prioritization = self._prioritization_score(state, true_violations)
+        warning_credit = self._warning_credit(state, true_violations)
 
         loop_deduction = min(0.10, state.loop_penalty_applied * 0.025)
 
         score = (
-            w_viol * detection_rate
-            + w_fp   * (1.0 - false_positive_rate)
-            + w_cov  * coverage
-            + w_eff  * efficiency
+            w_det * severity_detection
+            + w_fp  * (1.0 - false_positive_rate)
+            + w_cov * coverage
+            + w_eff * efficiency
+            + w_pri * prioritization
+            + 0.05  * warning_credit
             - loop_deduction
         )
 
@@ -365,22 +445,26 @@ class StreamingAuditGrader(BaseAuditGrader):
         )
 
         components = {
-            "detection_rate":      round(detection_rate, 4),
-            "false_positive_rate": round(false_positive_rate, 4),
-            "coverage":            round(coverage, 4),
-            "efficiency":          round(efficiency, 4),
-            "correct_detected":    correct_detected,
-            "total_violations":    total_violations,
-            "false_positives":     false_positives,
-            "records_checked":     records_checked,
-            "total_records":       total_records,
-            "loop_deduction":      round(loop_deduction, 4),
+            "severity_detection":   round(severity_detection, 4),
+            "detection_rate":       round(detection_rate, 4),
+            "false_positive_rate":  round(false_positive_rate, 4),
+            "coverage":             round(coverage, 4),
+            "efficiency":           round(efficiency, 4),
+            "prioritization_score": round(prioritization, 4),
+            "warning_credit":       round(warning_credit, 4),
+            "correct_detected":     correct_detected,
+            "total_violations":     total_violations,
+            "false_positives":      false_positives,
+            "records_checked":      records_checked,
+            "total_records":        total_records,
+            "loop_deduction":       round(loop_deduction, 4),
         }
         return GradingBreakdown(
             score=max(0.0, min(1.0, score)),
             components=components,
             failure_mode=failure_mode,
         )
+
 
 def grader_for_difficulty(difficulty: str) -> BaseAuditGrader:
     if difficulty == "easy":

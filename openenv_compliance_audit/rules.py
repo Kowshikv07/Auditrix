@@ -69,6 +69,32 @@ BACKGROUND_CHECK_ROLES: Set[str] = {
     "vp_finance",
 }
 
+# Violation severity tiers — used by graders for severity-weighted scoring
+VIOLATION_SEVERITY: dict = {
+    "R1":  "critical",   # child labour — immediate legal liability
+    "R4":  "critical",   # data integrity breach — payroll fraud risk
+    "R9":  "critical",   # GDPR Art.7 — regulatory fine risk
+    "R5":  "high",       # contract governance — legal exposure
+    "R6":  "high",       # background check — SOX / security risk
+    "R8":  "high",       # SOX §301 training requirement
+    "R3":  "medium",     # payroll band — financial control
+    "R7":  "medium",     # unapproved overtime — employment law
+    "R2":  "low",        # intern hours — advisory
+    "R10": "low",        # missing fields — data quality / administrative
+    "R11": "high",       # broken manager reference — org integrity
+}
+
+SEVERITY_WEIGHTS: dict = {
+    "critical": 2.0,
+    "high":     1.5,
+    "medium":   1.0,
+    "low":      0.5,
+}
+
+# Salary warning zone: 2% of band width below/above boundary triggers "warning"
+# instead of a clean "violation" (ambiguous / near-threshold case)
+SALARY_WARNING_PCT = 0.02
+
 # Fixed reference date used for R5 (deterministic, no datetime.today())
 AUDIT_REFERENCE_DATE = "2024-01-01"
 
@@ -107,6 +133,50 @@ class RuleDefinition:
         reason_codes = self._build_reason_codes(record_fields, is_violation, policy_override)
         evidence = self._build_evidence(record_fields, all_record_fields)
         return is_violation, reason_codes, evidence
+
+    def evaluate_with_confidence(
+        self,
+        record_fields: Dict[str, Any],
+        all_record_fields: Optional[List[Dict[str, Any]]] = None,
+        policy_override: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[str, str, List[str], Dict[str, Any]]:
+        """Return (verdict, confidence_tier, reason_codes, evidence).
+
+        verdict: one of "violation" | "warning" | "insufficient_evidence" | "compliant"
+          - "violation"              — clear, unambiguous breach
+          - "warning"                — near-threshold / ambiguous; flag with caution
+          - "insufficient_evidence"  — required field missing; cannot determine
+          - "compliant"              — passes cleanly
+
+        confidence_tier: "high" | "medium" | "low"
+        """
+        # Check for missing required fields first
+        evidence = self._build_evidence(record_fields, all_record_fields)
+        missing = self._check_missing_fields(record_fields)
+        if missing:
+            codes = [f"missing_field:{f}" for f in missing] + [f"rule_id:{self.rule_id}"]
+            return "insufficient_evidence", "low", codes, evidence
+
+        verdict = self._build_verdict(record_fields, all_record_fields, policy_override)
+        is_violation = (verdict in ("violation", "warning"))
+        reason_codes = self._build_reason_codes(record_fields, is_violation, policy_override)
+        if verdict == "warning":
+            reason_codes.append("verdict:near_threshold")
+        confidence = "high" if verdict in ("violation", "compliant") else "medium"
+        return verdict, confidence, reason_codes, evidence
+
+    def _check_missing_fields(self, record_fields: Dict[str, Any]) -> List[str]:
+        """Return list of field names that this rule needs but are missing."""
+        return []  # subclasses override
+
+    def _build_verdict(
+        self,
+        record_fields: Dict[str, Any],
+        all_record_fields: Optional[List[Dict[str, Any]]] = None,
+        policy_override: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """Return verdict string. Default: binary violation/compliant. Subclasses override for warnings."""
+        return "violation" if self.evaluate(record_fields, all_record_fields, policy_override) else "compliant"
 
     def _build_reason_codes(
         self,
@@ -170,6 +240,9 @@ class MinorOverhoursRule(RuleDefinition):
             "condition": "age < 18 and hours > threshold",
         }
 
+    def _check_missing_fields(self, record_fields):
+        return [f for f in ("age", "hours") if record_fields.get(f) is None]
+
 
 @dataclass(frozen=True)
 class InternOverhoursRule(RuleDefinition):
@@ -208,7 +281,11 @@ class InternOverhoursRule(RuleDefinition):
 
 @dataclass(frozen=True)
 class SalaryRangeRule(RuleDefinition):
-    """R3 — Salary outside approved range for the employee's role."""
+    """R3 — Salary outside approved range for the employee's role.
+
+    policy_override keys:
+      salary_tolerance_pct — fraction of band width treated as warning zone (default SALARY_WARNING_PCT)
+    """
 
     def evaluate(self, record_fields, all_record_fields=None, policy_override=None):
         role = str(record_fields.get("role", "")).lower()
@@ -217,6 +294,24 @@ class SalaryRangeRule(RuleDefinition):
             return False
         lo, hi = ROLE_SALARY_RANGES[role]
         return not (lo <= float(salary) <= hi)
+
+    def _build_verdict(self, record_fields, all_record_fields=None, policy_override=None):
+        role = str(record_fields.get("role", "")).lower()
+        salary = record_fields.get("salary")
+        if salary is None or role not in ROLE_SALARY_RANGES:
+            return "compliant"
+        lo, hi = ROLE_SALARY_RANGES[role]
+        s = float(salary)
+        if lo <= s <= hi:
+            return "compliant"
+        tol_pct = (policy_override or {}).get("salary_tolerance_pct", SALARY_WARNING_PCT)
+        warning_zone = tol_pct * (hi - lo)
+        if (lo - warning_zone) <= s < lo or hi < s <= (hi + warning_zone):
+            return "warning"
+        return "violation"
+
+    def _check_missing_fields(self, record_fields):
+        return [f for f in ("salary", "role") if record_fields.get(f) is None]
 
     def _build_reason_codes(self, record_fields, is_violation, policy_override):
         role = str(record_fields.get("role", "")).lower()
@@ -282,14 +377,22 @@ class ExpiredContractRule(RuleDefinition):
         contract_end = record_fields.get("contract_end", "")
         if not contract_end or status != "active":
             return False
-        # Lexicographic comparison works for ISO-8601 dates (YYYY-MM-DD)
-        return str(contract_end) < AUDIT_REFERENCE_DATE
+    def evaluate(self, record_fields, all_record_fields=None, policy_override=None):
+        status = str(record_fields.get("status", "")).lower()
+        contract_end = record_fields.get("contract_end", "")
+        if not contract_end or status != "active":
+            return False
+        ref_date = (policy_override or {}).get("audit_reference_date", AUDIT_REFERENCE_DATE)
+        return str(contract_end) < ref_date
 
     def _build_reason_codes(self, record_fields, is_violation, policy_override):
+        ref_date = (policy_override or {}).get("audit_reference_date", AUDIT_REFERENCE_DATE)
         codes = ["rule_condition_met" if is_violation else "rule_condition_not_met", "rule_id:R5"]
         codes.append(f"field:status={record_fields.get('status')}")
         codes.append(f"field:contract_end={record_fields.get('contract_end')}")
-        codes.append(f"reference_date:{AUDIT_REFERENCE_DATE}")
+        codes.append(f"reference_date:{ref_date}")
+        if policy_override and "audit_reference_date" in policy_override:
+            codes.append(f"policy_override:audit_reference_date={ref_date}")
         return codes
 
     def _build_evidence(self, record_fields, all_record_fields=None):
@@ -306,20 +409,31 @@ class ExpiredContractRule(RuleDefinition):
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class BackgroundCheckRequiredRule(RuleDefinition):
-    """R6 — Employees in sensitive roles must have a completed background check."""
+    """R6 — Employees in sensitive roles must have a completed background check.
+
+    policy_override keys:
+      additional_sensitive_roles — list[str] of extra roles that now require background checks
+        (e.g. a POLICY_UPDATE may add 'contractor' or 'analyst' mid-episode)
+    """
+
+    def _effective_sensitive_roles(self, policy_override):
+        extra = (policy_override or {}).get("additional_sensitive_roles", [])
+        return BACKGROUND_CHECK_ROLES | set(r.lower() for r in extra)
 
     def evaluate(self, record_fields, all_record_fields=None, policy_override=None):
         role = str(record_fields.get("role", "")).lower()
-        if role not in BACKGROUND_CHECK_ROLES:
+        if role not in self._effective_sensitive_roles(policy_override):
             return False
-        bg_check = record_fields.get("background_check")
-        return bg_check is not True
+        return record_fields.get("background_check") is not True
 
     def _build_reason_codes(self, record_fields, is_violation, policy_override):
+        sensitive = self._effective_sensitive_roles(policy_override)
         codes = ["rule_condition_met" if is_violation else "rule_condition_not_met", "rule_id:R6"]
         codes.append(f"field:role={record_fields.get('role')}")
         codes.append(f"field:background_check={record_fields.get('background_check')}")
-        codes.append(f"sensitive_role_check:required={record_fields.get('role','').lower() in BACKGROUND_CHECK_ROLES}")
+        codes.append(f"sensitive_role_check:required={record_fields.get('role','').lower() in sensitive}")
+        if policy_override and "additional_sensitive_roles" in policy_override:
+            codes.append(f"policy_override:additional_sensitive_roles={policy_override['additional_sensitive_roles']}")
         return codes
 
     def _build_evidence(self, record_fields, all_record_fields=None):
@@ -350,6 +464,23 @@ class UnapprovedOvertimeRule(RuleDefinition):
         if float(hours) <= threshold:
             return False
         return record_fields.get("overtime_approved") is not True
+
+    def _build_verdict(self, record_fields, all_record_fields=None, policy_override=None):
+        """hours exactly at threshold → 'warning' (policy-dependent interpretation)."""
+        hours = record_fields.get("hours")
+        if hours is None:
+            return "compliant"
+        threshold = (policy_override or {}).get("overtime_hours_threshold", self.DEFAULT_THRESHOLD)
+        h = float(hours)
+        if h <= threshold - 1:  # clearly below
+            return "compliant"
+        if h == float(threshold):  # exactly at threshold — ambiguous
+            return "warning"
+        # above threshold
+        return "violation" if record_fields.get("overtime_approved") is not True else "compliant"
+
+    def _check_missing_fields(self, record_fields):
+        return [f for f in ("hours",) if record_fields.get(f) is None]
 
     def _build_reason_codes(self, record_fields, is_violation, policy_override):
         threshold = (policy_override or {}).get("overtime_hours_threshold", self.DEFAULT_THRESHOLD)
@@ -463,6 +594,45 @@ class MissingRequiredFieldsRule(RuleDefinition):
 
 
 # ---------------------------------------------------------------------------
+# R11 — Manager reference integrity
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class ManagerReferenceRule(RuleDefinition):
+    """R11 — manager_id references a non-existent employee ID in the dataset.
+
+    Requires cross-record access (all_record_fields) to check.
+    If manager_id is None the record is exempt (no manager required).
+    Forces the agent to maintain a mental model of which employee IDs exist.
+    """
+
+    def evaluate(self, record_fields, all_record_fields=None, policy_override=None):
+        manager_id = record_fields.get("manager_id")
+        if manager_id is None:
+            return False
+        if all_record_fields is None:
+            return False  # can't cross-check without dataset context
+        existing_ids = {r.get("id") for r in all_record_fields if r.get("id") is not None}
+        return manager_id not in existing_ids
+
+    def _build_reason_codes(self, record_fields, is_violation, policy_override):
+        codes = ["rule_condition_met" if is_violation else "rule_condition_not_met", "rule_id:R11"]
+        codes.append(f"field:manager_id={record_fields.get('manager_id')}")
+        codes.append("cross_record_check_required")
+        return codes
+
+    def _build_evidence(self, record_fields, all_record_fields=None):
+        manager_id = record_fields.get("manager_id")
+        existing = []
+        if all_record_fields and manager_id is not None:
+            existing = [r.get("id") for r in all_record_fields if r.get("id") is not None]
+        return {
+            "manager_id": manager_id,
+            "manager_exists": (manager_id in existing) if manager_id is not None else None,
+            "condition": "manager_id is not None and manager_id not in {all employee ids}",
+        }
+
+
+# ---------------------------------------------------------------------------
 # Rule registry
 # ---------------------------------------------------------------------------
 RULES: Dict[str, RuleDefinition] = {
@@ -522,16 +692,22 @@ RULES: Dict[str, RuleDefinition] = {
             "any of [id, name, role, hours, salary] is absent or None"
         ),
     ),
+    "R11": ManagerReferenceRule(
+        rule_id="R11",
+        description="Manager ID references non-existent employee",
+        condition_summary="manager_id is not None and manager_id not in {all employee ids}",
+    ),
 }
 
 
 def rule_info() -> List[Dict[str, str]]:
-    """Return serialisable rule metadata (for observations)."""
+    """Return serialisable rule metadata (for observations), including severity tier."""
     return [
         {
             "rule_id": r.rule_id,
             "description": r.description,
             "condition": r.condition_summary,
+            "severity": VIOLATION_SEVERITY.get(r.rule_id, "medium"),
         }
         for r in RULES.values()
     ]

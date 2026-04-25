@@ -1,10 +1,12 @@
 id: openenv-compliance-audit
-name: OpenEnv Compliance Audit
-version: 1.0.0
+name: Auditrix — Compliance Audit Environment
+version: 1.1.0
 description: >
-  A deterministic, real-world compliance audit environment where an AI agent
-  inspects structured organisational records, applies configurable compliance
-  rules, flags violations, and produces a final audit report.
+  A training environment for reliable, auditable decision-making under uncertainty
+  in high-stakes enterprise systems. An AI agent inspects structured organisational
+  records, applies configurable compliance rules, deliberates using confidence-calibrated
+  verdicts, and produces a final audit report — prioritising high-severity violations
+  under step-budget constraints.
 
   Eight tasks spanning five difficulty levels — including long-horizon sparse-reward
   and extreme stress-test scenarios designed for Theme #2 (Long-Horizon Planning)
@@ -15,19 +17,21 @@ description: >
     • finance_sox_audit        — 15 records,  4 rules (R3, R6, R7, R8): SOX pre-certification
     • gdpr_privacy_audit       — 10 records,  3 rules (R5, R8, R9): GDPR data-privacy
     • data_integrity_audit     —  8 records,  3 rules (R3, R4, R10): missing fields + dup IDs
-    • regulatory_storm_audit   — 25 records, 10 rules (R1-R10): extreme multi-domain stress-test
-                                  with dynamic POLICY_UPDATE, SYSTEM_OUTAGE, RECORD_AMENDMENT events
+    • regulatory_storm_audit   — 25 records, 11 rules (R1-R11): extreme multi-domain stress-test
+                                  with POLICY_UPDATE, SYSTEM_OUTAGE, RECORD_AMENDMENT, RULE_SUSPENSION
+                                  and R11 cross-record manager reference integrity checks
     • streaming_long_horizon   — 350 records, 10 rules (R1-R10), 400 steps, sparse rewards.
-                                  Agent must call prioritize_rules() then strategically sample
-                                  records to hit ≥30% coverage under strict step budget.
-                                  Zero per-step feedback — terminal reward only.
+                                  Agent must prioritize_rules() then strategically sample records.
 
-  Ten rules across five compliance domains:
+  Eleven rules across five compliance domains:
     Employment (R1, R2, R7): minor protection, intern caps, overtime law
-    Financial  (R3):         salary band enforcement
-    Data Integrity (R4, R10): duplicate IDs, missing required fields
+    Financial  (R3):         salary band enforcement (warning zone at ±2% boundary)
+    Data Integrity (R4, R10, R11): duplicate IDs, missing fields, orphan manager references
     Governance (R5, R6, R8): expired contracts, background checks, training
     Data Privacy (R9):       GDPR consent for PII access
+
+  Verdict taxonomy: violation | warning | insufficient_evidence | compliant
+  Severity tiers: critical (R1, R4, R9) | high (R5, R6, R8, R11) | medium (R3, R7) | low (R2, R10)
 
 author: Kowshik
 license: MIT
@@ -114,13 +118,13 @@ tasks:
     difficulty: extreme
     title: "Regulatory Storm: Multi-Domain Stress-Test Audit"
     objective: >
-      Extreme stress-test across 25 records covering all 10 rules (R1-R10).
-      Three simultaneous duplicate-ID groups; overlapping GDPR + overtime
-      violations; mid-episode dynamic events: POLICY_UPDATE (overtime threshold
-      48→40), two SYSTEM_OUTAGEs, two RECORD_AMENDMENTs.
-      Static memorisation of rules fails — correct answers depend on the
-      seed-dependent event schedule. Score ≥0.50 requires zero false positives
-      and ≥50% detection; score 1.0 requires full detection + efficient coverage.
+      Extreme stress-test across 25 records with all 11 rules (R1-R11) simultaneously.
+      Three simultaneous duplicate-ID groups; overlapping GDPR + overtime violations;
+      R11 orphan manager references requiring cross-record reasoning; mid-episode
+      dynamic events: POLICY_UPDATE (overtime 48→40), two SYSTEM_OUTAGEs,
+      two RECORD_AMENDMENTs. Severity-weighted scoring: catching GDPR violations
+      counts 4x more than catching low-severity ones.
+      Score >=0.50 requires zero false positives and >=50% severity-weighted detection.
 
   - id: streaming_long_horizon
     difficulty: streaming

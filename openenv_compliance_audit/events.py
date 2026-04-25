@@ -386,10 +386,13 @@ class EventScheduler:
         event_schedule: List[EventEntry],
         records: Dict[str, Any],
         policy_overrides: Dict[str, Any],
+        suspended_rule_ids: Optional[List[str]] = None,
+        suspended_rule_expiry: Optional[Dict[str, int]] = None,
     ) -> List[EventEntry]:
         """Apply any events whose trigger_step == current step.
 
         Modifies records and policy_overrides in-place.
+        suspended_rule_ids and suspended_rule_expiry are modified in-place if provided.
         Returns the list of events that fired this step.
         """
         fired_this_step: List[EventEntry] = []
@@ -424,6 +427,15 @@ class EventScheduler:
                         records[rec_id].original_fields = dict(records[rec_id].fields)
                     records[rec_id].fields[field] = new_value
 
+            elif event.event_type == EventType.RULE_SUSPENSION:
+                rule_id = event.rule_id
+                duration = event.payload.get("duration_steps", 10)
+                if rule_id and suspended_rule_ids is not None:
+                    if rule_id not in suspended_rule_ids:
+                        suspended_rule_ids.append(rule_id)
+                    if suspended_rule_expiry is not None:
+                        suspended_rule_expiry[rule_id] = step + duration
+
             event.fired = True
             fired_this_step.append(event)
 
@@ -432,4 +444,13 @@ class EventScheduler:
             if rec.system_outage and step >= rec.outage_ends_at_step:
                 rec.system_outage = False
 
+        # Expire any suspended rules
+        if suspended_rule_ids is not None and suspended_rule_expiry is not None:
+            expired = [r for r, exp in suspended_rule_expiry.items() if step >= exp]
+            for r in expired:
+                if r in suspended_rule_ids:
+                    suspended_rule_ids.remove(r)
+                del suspended_rule_expiry[r]
+
         return fired_this_step
+

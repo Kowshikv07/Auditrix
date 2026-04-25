@@ -50,7 +50,7 @@ MAX_TOKENS = 256
 FALLBACK_FINISH = {"action_type": "finish", "record_id": None, "rule_id": None}
 
 # ---------------------------------------------------------------------------
-# System prompt — covers all 10 rules so the agent reasons correctly
+# System prompt — covers all 11 rules, verdict taxonomy, severity scoring
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """\
 You are an AI compliance auditor agent operating inside an OpenEnv environment.
@@ -62,74 +62,104 @@ No prose. No markdown fences. Just raw JSON.
 AVAILABLE ACTIONS
 ──────────────────────────────────────────────────────────
   inspect_record   — reveal a record's fields (REQUIRED before any audit action)
-  apply_rule       — run a compliance rule against an inspected record (+0.2 if violation found)
-  flag_violation   — officially flag a (record, rule) pair as a violation (+0.5 correct / -0.3 wrong)
+  apply_rule       — run a compliance rule; returns verdict + confidence + evidence
+  request_evidence — gather detailed evidence on a 'warning' verdict (FREE — 0 reward cost)
+  flag_violation   — officially flag a confirmed violation (+0.5 correct / -0.3 wrong)
+  retract_flag     — undo a flag if new evidence/amendment resolves it (-0.10 if FP retract)
   mark_compliant   — declare a record has no violations (+0.05 if truly compliant)
-  prioritize_rules — [STREAMING TASK ONLY] declare your rule priority strategy BEFORE auditing.
-                     This is FREE (zero step cost). Provide rule_priority_order as a list of all
-                     active rule IDs in the order you want to audit them. Do this FIRST.
-  generate_report  — submit the final audit report (ends episode, best terminal bonus)
-  finish           — end the episode without a report (lower terminal reward)
+  prioritize_rules — declare rule priority order (call ONCE at start, before any inspect).
+                     FREE action. Provide all active rule IDs highest→lowest severity.
+  generate_report  — submit the final audit report (ends episode)
+  finish           — end episode without report (lower terminal reward)
 
 JSON schema:
   {"action_type": "<value>", "record_id": "<id or null>", "rule_id": "<id or null>"}
-  For prioritize_rules: {"action_type": "prioritize_rules", "rule_priority_order": ["R8", "R3", ...]}
+  For prioritize_rules: {"action_type": "prioritize_rules", "rule_priority_order": ["R9", "R4", ...]}
 
 ──────────────────────────────────────────────────────────
 COMPLIANCE RULES REFERENCE
 ──────────────────────────────────────────────────────────
-R1  Minor overhours          — age < 18 AND hours > threshold (default 8, may change via POLICY_UPDATE)
-R2  Intern overhours         — role == 'intern' AND hours > threshold (default 40)
-R3  Salary out of range      — salary < role_min OR salary > role_max
-                               (each role has its own band; check available_rules for detail)
-R4  Duplicate employee ID    — same 'id' value in more than one record
-R5  Expired contract active  — contract_end < '2024-01-01' AND status == 'active'
-R6  Background check missing — sensitive role (manager/director/finance_manager/accountant/
-                               cfo/security/hr/compliance_officer/legal_counsel/vp_finance)
-                               AND background_check != True
-R7  Unapproved overtime      — hours > threshold (default 48, STRICT >) AND overtime_approved != True
-                               ⚠ Exactly threshold hours is NOT a violation (edge case)
-                               ⚠ POLICY_UPDATE can lower the threshold mid-episode
-R8  Missing compliance train — status == 'active' AND compliance_training != True
-                               ⚠ Inactive employees are EXEMPT from this rule
-R9  GDPR consent missing     — pii_access == True AND gdpr_consent != True
-                               ⚠ If pii_access is False/absent, rule does NOT apply
-R10 Missing required fields  — any of {id,name,role,hours,salary} is missing or null
+R1  Minor overhours          [CRITICAL] — age < 18 AND hours > threshold (default 8)
+                               May change via POLICY_UPDATE.
+R2  Intern overhours         [LOW]      — role == 'intern' AND hours > threshold (default 40)
+R3  Salary out of range      [MEDIUM]   — salary outside role band
+                               ⚠ Within ±2% of band edge → verdict='warning'; use request_evidence
+R4  Duplicate employee ID    [CRITICAL] — same 'id' in more than one record
+R5  Expired contract active  [HIGH]     — contract_end < '2024-01-01' AND status == 'active'
+R6  Background check missing [HIGH]     — sensitive role AND background_check != True
+                               Sensitive: manager/director/finance_manager/accountant/
+                               cfo/security/hr/compliance_officer/legal_counsel/vp_finance
+R7  Unapproved overtime      [MEDIUM]   — hours > threshold (default 48) AND overtime_approved != True
+                               ⚠ Exactly threshold hours is NOT a violation
+                               ⚠ POLICY_UPDATE can lower threshold mid-episode
+R8  Missing compliance train [HIGH]     — status == 'active' AND compliance_training != True
+                               ⚠ Inactive employees are EXEMPT
+R9  GDPR consent missing     [CRITICAL] — pii_access == True AND gdpr_consent != True
+                               ⚠ pii_access False/absent → rule does NOT apply
+R10 Missing required fields  [LOW]      — any of {id,name,role,hours,salary} missing or null
                                ⚠ Zero values are valid; only missing/null is a violation
 
-Only rules listed in 'available_rules' are active for the current task.
+Only rules in 'available_rules' are active. Rules in 'suspended_rule_ids' are OFF — skip them.
+R11 Orphan manager reference [HIGH]     — manager_id is set AND not found in any employee id
+                               ⚠ manager_id=null → exempt; only non-null IDs are checked
+                               ⚠ Requires cross-record check: track all employee IDs seen
+
+──────────────────────────────────────────────────────────
+VERDICT TAXONOMY (returned by apply_rule / request_evidence)
+──────────────────────────────────────────────────────────
+  "violation"             — clear breach → flag_violation immediately
+  "warning"               — near-threshold ambiguity → call request_evidence, then decide
+  "insufficient_evidence" — required field missing → cannot evaluate; do NOT flag
+  "compliant"             — rule not triggered
+
+──────────────────────────────────────────────────────────
+SEVERITY-WEIGHTED SCORING
+──────────────────────────────────────────────────────────
+Missing a CRITICAL violation hurts 4x more than missing a LOW one:
+  critical (R1, R4, R9)       → weight 2.0
+  high     (R5, R6, R8, R11)  → weight 1.5
+  medium   (R3, R7)           → weight 1.0
+  low      (R2, R10)          → weight 0.5
+
+Prioritize flagging critical/high violations. If steps are limited,
+skip low-severity checks rather than critical ones.
 
 ──────────────────────────────────────────────────────────
 DYNAMIC EVENTS
 ──────────────────────────────────────────────────────────
-Mid-episode events may change the audit landscape:
+  POLICY_UPDATE    — A rule's threshold may change (e.g. overtime threshold 48→40).
+                     Check 'current_policy_overrides' in the observation EVERY step.
+                     Re-evaluate any previously applied rules if the threshold changed.
 
-  POLICY_UPDATE      — A rule's threshold may change (e.g. overtime threshold 48→40).
-                       Check 'current_policy_overrides' in the observation EVERY step.
-                       Re-evaluate any previously applied rules if the threshold changed.
+  SYSTEM_OUTAGE    — A record becomes temporarily inaccessible (system_outage=true).
+                     Skip it; retry after outage_ends_at step.
 
-  SYSTEM_OUTAGE      — A record becomes temporarily inaccessible.
-                       'system_outage': true in the record view. Inspecting it returns an error.
-                       Wait until the outage ends (visible in the record view) then retry.
+  RECORD_AMENDMENT — A field value is corrected mid-episode.
+                     Re-run apply_rule on the amended record. If a violation is resolved,
+                     call retract_flag (if you already flagged it) before reporting.
 
-  RECORD_AMENDMENT   — A field value is corrected mid-episode.
-                       If a record's field changes and its violation is resolved,
-                       do NOT flag that violation (it would be a false positive).
+  RULE_SUSPENSION  — A rule is temporarily deactivated.
+                     Suspended rules appear in 'suspended_rule_ids'. Do NOT apply them.
+                     They reactivate automatically; check each step.
 
 Fired events are listed in 'active_events' in the observation.
 
 ──────────────────────────────────────────────────────────
 OPTIMAL STRATEGY
 ──────────────────────────────────────────────────────────
-1. Inspect every record (inspect_record) — fields are hidden until inspected.
-   Skip records in SYSTEM_OUTAGE; come back after outage_ends_at step.
-2. For each inspected record, apply_rule for each active rule.
-   A positive reward (+0.2) signals a real violation — take note.
-   Check current_policy_overrides BEFORE applying R1, R2, R7.
-3. For every confirmed violation, call flag_violation.
-   Do NOT flag violations on records that had RECORD_AMENDMENT resolving the issue.
-4. For records with no violations, call mark_compliant.
-5. Call generate_report with a structured payload including audit_confidence section.
+1. prioritize_rules([highest→lowest severity]) — call ONCE at episode start.
+   Recommended order: R1, R4, R9, R5, R6, R8, R11, R3, R7, R2, R10
+   (only include rules in 'available_rules')
+2. Inspect every record. Skip system_outage=true records; retry later.
+3. For each inspected record, apply_rule for each active (non-suspended) rule:
+   • verdict=violation → flag_violation immediately
+   • verdict=warning → request_evidence, then decide (half FP-penalty if wrong)
+   • verdict=insufficient_evidence → do NOT flag; mark_compliant if no other violations
+   • Check current_policy_overrides BEFORE applying R1, R2, R7.
+4. After a RECORD_AMENDMENT fires, re-apply rules on the amended record.
+   If the violation is resolved and you already flagged it, call retract_flag.
+5. For records with no violations, call mark_compliant.
+6. Call generate_report with a structured payload including audit_confidence section.
 
 ──────────────────────────────────────────────────────────
 CRITICAL RULES
@@ -137,8 +167,9 @@ CRITICAL RULES
 • Never repeat the same action twice on the same record (penalty -0.05 / -0.10).
 • More than 3 identical (action_type, record_id) in 5 steps = loop penalty (-0.10).
 • flag_violation on a compliant record costs -0.3 — be precise.
-• Respect rule exemptions: inactive employees skip R5 and R8;
-  employees without pii_access skip R9; non-sensitive roles skip R6.
+• Respect rule exemptions: inactive employees skip R5/R8; no pii_access skips R9;
+  non-sensitive roles skip R6; manager_id=null skips R11.
+• Do NOT apply suspended rules (check suspended_rule_ids every step).
 • record_id and rule_id must match exactly what appears in the observation.
 • generate_report payload should include audit_confidence section for bonus points.
 """
@@ -168,46 +199,55 @@ def _fmt_reward(value: float) -> str:
 
 
 def _fmt_action(action: AuditAction) -> str:
-    payload = {
-        "action_type": action.action_type.value,
-        "record_id": action.record_id,
-        "rule_id": action.rule_id,
-    }
+    payload: Dict[str, Any] = {"action_type": action.action_type.value}
+    if action.rule_priority_order:
+        payload["rule_priority_order"] = action.rule_priority_order
+    else:
+        payload["record_id"] = action.record_id
+        payload["rule_id"] = action.rule_id
     if action.report is not None:
         payload["report"] = action.report
     return json.dumps(payload, separators=(",", ":"), ensure_ascii=True)
+
+
+# Severity-first priority for fallback heuristic
+_SEVERITY_ORDER = ["R1", "R4", "R9", "R5", "R6", "R8", "R11", "R3", "R7", "R2", "R10"]
 
 
 def _fallback_action(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
     """Heuristic fallback when the model produces unparseable output.
 
     Priority order:
-      1. Inspect any un-inspected record.
-      2. Apply any unapplied active rule on each inspected record.
+      1. Inspect any un-inspected, non-outage record.
+      2. Apply any unapplied active (non-suspended) rule in severity order.
       3. Flag confirmed violations not yet flagged.
-      4. Mark records with all rules applied and no violations as compliant.
+      4. Mark records with no remaining violations as compliant.
       5. generate_report.
     """
     records = obs_dict.get("visible_records", [])
-    active_rules = [r["rule_id"] for r in obs_dict.get("available_rules", [])]
+    suspended = set(obs_dict.get("suspended_rule_ids", []))
+    available = {r["rule_id"] for r in obs_dict.get("available_rules", [])}
+    # Active = available AND not suspended, ordered by severity
+    active_rules = [
+        r for r in _SEVERITY_ORDER if r in available and r not in suspended
+    ] + [r for r in available if r not in _SEVERITY_ORDER and r not in suspended]
     flagged_pairs = {
         (v["record_id"], v["rule_id"]) for v in obs_dict.get("violations_found", [])
     }
 
-    # Step 1: inspect un-inspected records
+    # Step 1: inspect un-inspected records (skip outage records)
     for rec in records:
-        if not rec.get("inspected"):
+        if not rec.get("inspected") and not rec.get("system_outage"):
             return {"action_type": "inspect_record", "record_id": rec["record_id"], "rule_id": None}
 
-    # Step 2: apply unapplied rules on inspected records
-    for rec in records:
-        if not rec.get("inspected"):
-            continue
-        rec_flags = set(rec.get("flags", []))
-        for rule_id in active_rules:
+    # Step 2: apply unapplied rules on inspected records (severity order)
+    for rule_id in active_rules:
+        for rec in records:
+            if not rec.get("inspected") or rec.get("system_outage"):
+                continue
+            rec_flags = set(rec.get("flags", []))
             pair = (rec["record_id"], rule_id)
             if rule_id not in rec_flags and pair not in flagged_pairs:
-                # Use apply_rule to probe — the environment will tell us if it's a violation
                 return {
                     "action_type": "apply_rule",
                     "record_id": rec["record_id"],
@@ -216,11 +256,14 @@ def _fallback_action(obs_dict: Dict[str, Any]) -> Dict[str, Any]:
 
     # Step 3: flag any violations already discovered but not yet flagged
     for v in obs_dict.get("violations_found", []):
-        return {
-            "action_type": "flag_violation",
-            "record_id": v["record_id"],
-            "rule_id": v["rule_id"],
-        }
+        rec_id, rule_id = v["record_id"], v["rule_id"]
+        # Only flag if rule is still active and not suspended
+        if rule_id in available and rule_id not in suspended:
+            return {
+                "action_type": "flag_violation",
+                "record_id": rec_id,
+                "rule_id": rule_id,
+            }
 
     return {"action_type": "generate_report", "record_id": None, "rule_id": None}
 
@@ -242,9 +285,13 @@ def _choose_action(
                     "remaining_steps": obs_dict.get("remaining_steps"),
                     "objective": obs_dict.get("objective"),
                     "available_rules": obs_dict.get("available_rules", []),
+                    "suspended_rule_ids": obs_dict.get("suspended_rule_ids", []),
+                    "current_policy_overrides": obs_dict.get("current_policy_overrides", {}),
+                    "active_events": obs_dict.get("active_events", []),
                     "visible_records": obs_dict.get("visible_records", []),
                     "checked_records": obs_dict.get("checked_records", []),
                     "violations_found": obs_dict.get("violations_found", []),
+                    "last_decision_trace": obs_dict.get("last_decision_trace"),
                     "recent_actions": history[-8:],
                     "last_action_error": obs_dict.get("last_action_error"),
                 },
@@ -306,6 +353,7 @@ def run_task(client: OpenAI, task_id: str, model_name: str, seed: int = 42) -> t
     prev_sig: Optional[tuple[str, Optional[str], Optional[str]]] = None
     repeat_count = 0
     failure_mode = "none"
+    last_info: Dict[str, Any] = {}  # populated each step; grading_breakdown on terminal step
 
     print(f"[START] task={task_id} env={BENCHMARK} model={model_name} seed={seed}")
 
@@ -341,6 +389,7 @@ def run_task(client: OpenAI, task_id: str, model_name: str, seed: int = 42) -> t
             rewards.append(reward)
             score = max(0.0, min(1.0, float(result.info.get("task_score", 0.0))))
             failure_mode = str(result.info.get("failure_mode", "none"))
+            last_info = dict(result.info)  # capture for grading_breakdown on terminal step
             error_value = obs.get("last_action_error")
             error_text = str(error_value) if error_value else "null"
 
@@ -365,9 +414,13 @@ def run_task(client: OpenAI, task_id: str, model_name: str, seed: int = 42) -> t
         env.close()
 
     rewards_text = ",".join(_fmt_reward(r) for r in rewards)
+    breakdown = last_info.get("grading_breakdown", {})
+    sev_det = breakdown.get("severity_detection", "n/a")
+    pri_score = breakdown.get("prioritization_score", "n/a")
     print(
         f"[END] success={_bool_text(success)} steps={step} "
-        f"score={score:.2f} rewards={rewards_text} failure_mode={failure_mode}"
+        f"score={score:.2f} severity_detection={sev_det} prioritization={pri_score} "
+        f"rewards={rewards_text} failure_mode={failure_mode}"
     )
 
     _append_run_log(
@@ -381,11 +434,14 @@ def run_task(client: OpenAI, task_id: str, model_name: str, seed: int = 42) -> t
             "steps": step,
             "success": success,
             "failure_mode": failure_mode,
+            "severity_detection": sev_det,
+            "prioritization_score": pri_score,
             "rewards": [round(item, 4) for item in rewards],
         }
     )
 
     return score, failure_mode
+
 
 
 

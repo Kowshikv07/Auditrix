@@ -83,18 +83,20 @@ All actions are submitted as JSON via `POST /step`.
 |---|---|---|---|---|
 | `inspect_record` | required | — | — | Reveal a record's fields. Required before any audit action. |
 | `apply_rule` | required | required | — | Run a compliance rule on an inspected record. Returns +0.2 if a violation is found. |
+| `request_evidence` | required | required | — | Gather detailed evidence for a rule (useful for 'warning' verdicts). Free action. |
 | `flag_violation` | required | required | — | Officially flag a (record, rule) violation. +0.5 if correct, −0.3 if false positive. |
+| `retract_flag` | required | required | — | Retract a previously-flagged violation if new evidence changes your view. |
 | `mark_compliant` | required | — | — | Declare a record fully compliant. +0.05 if right, −0.10 if violations were missed. |
-| `prioritize_rules` | — | — | required | **[Streaming only]** Declare rule priority order. Free action (no step cost). Must match the full set of active rules. |
+| `prioritize_rules` | — | — | required | Declare rule priority order (highest-severity first). Free action. Call once per episode. |
 | `generate_report` | — | — | — | Submit the final audit report and end the episode (higher terminal reward). |
 | `finish` | — | — | — | End the episode without a report (lower terminal reward). |
 
 **Example actions:**
 ```json
-{"action_type": "flag_violation", "record_id": "E001", "rule_id": "R1"}
+{"action_type": "request_evidence", "record_id": "E001", "rule_id": "R3"}
 ```
 ```json
-{"action_type": "prioritize_rules", "rule_priority_order": ["R8", "R3", "R9", "R7", "R6", "R5", "R4", "R10", "R2", "R1"]}
+{"action_type": "prioritize_rules", "rule_priority_order": ["R9", "R4", "R6", "R8", "R1", "R5", "R11", "R7", "R3", "R2", "R10"]}
 ```
 
 ---
@@ -331,20 +333,27 @@ Hard caps:
 
 ## Reward Function
 
-| Event | Reward |
-|---|---|
-| First inspection of a record | +0.06 |
-| Repeat inspection (redundant) | −0.02 |
-| Rule applied and violation found | +0.20 |
-| Repeat rule application | −0.05 |
-| Correct violation flag | +0.50 |
-| False positive flag | −0.30 |
-| Correct `mark_compliant` | +0.05 |
-| Wrong `mark_compliant` (missed violations) | −0.10 |
-| Terminal bonus — `generate_report` | +0.30 × final_score |
-| Terminal bonus — `finish` | +0.15 × final_score |
+Auditrix utilizes a **Multi-Signal GRPO** reward system. Instead of a single scalar task score, the trainer is fed 8 independent reward functions. This provides per-step visibility, making it easy to diagnose reward hacking (e.g., coverage climbing while detection stays at 0).
 
-All rewards are clamped to **[−1.0, +1.0]** per step.
+| Reward Function | Description | Weight |
+|---|---|---|
+| `reward_task_score` | Full composite grader score (backward compat) | 1.0× |
+| `reward_severity` | Severity-weighted detection (missing CRITICAL hurts 4x more) | 0.55× |
+| `reward_precision` | Flagging precision (FP-safe: returns 0.0 if nothing flagged) | 0.25× |
+| `reward_coverage` | Inspection thoroughness (records_checked / total_records) | 0.10× |
+| `reward_efficiency` | Conciseness (steps_remaining / max_steps) | 0.05× |
+| `reward_prioritization` | Quality of the severity ordering declared by `prioritize_rules` | 0.08× |
+| `reward_deliberation` | Bonus for using `request_evidence` on ambiguous "warning" verdicts | ≤ 0.15 |
+| `reward_anti_exploit` | Penalty for detected loop-exploits | ≤ -0.30 |
+
+### Step-by-Step Proximal Rewards
+The environment also emits small proximal rewards during the episode to help bootstrap learning before the terminal breakdown is calculated:
+- **Rule application**: `+0.20` if violation found
+- **Correct flag**: `+0.50`
+- **False positive flag**: `-0.30`
+- **Redundant action**: `-0.02` to `-0.05`
+
+All step rewards are clamped to **[−1.0, +1.0]** per step.
 
 ### Final Score Formula
 
