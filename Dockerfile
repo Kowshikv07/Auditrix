@@ -29,7 +29,7 @@ RUN pip install \
     "transformers==4.51.3" \
     "trl==0.19.1" \
     "peft==0.14.0" \
-    "accelerate==0.34.2" \
+    "accelerate==1.4.0" \
     "bitsandbytes==0.44.1" \
     "datasets==3.1.0" \
     "huggingface_hub>=0.24.0"
