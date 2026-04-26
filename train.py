@@ -787,9 +787,19 @@ def train():
     print(f"\nModel saved → {OUTPUT_DIR}/")
 
     if PUSH_TO_HUB and HUB_REPO_ID:
-        model.push_to_hub(HUB_REPO_ID, token=HF_TOKEN)
-        tokenizer.push_to_hub(HUB_REPO_ID, token=HF_TOKEN)
-        print(f"Pushed → {HUB_REPO_ID}")
+        try:
+            model.push_to_hub(HUB_REPO_ID, token=HF_TOKEN)
+            tokenizer.push_to_hub(HUB_REPO_ID, token=HF_TOKEN)
+            print(f"Pushed → {HUB_REPO_ID}")
+        except Exception as exc:  # noqa: BLE001
+            print(
+                "HF push skipped: unable to create or write to repository "
+                f"{HUB_REPO_ID!r}. Error: {exc}"
+            )
+            print(
+                "If you want Hub upload, set HUB_REPO_ID to an existing model repo "
+                "you can write to, or leave PUSH_TO_HUB=0 to disable upload."
+            )
 
     print("\nGround truth used during training:")
     for task_id in TRAIN_TASKS:
