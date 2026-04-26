@@ -41,5 +41,5 @@ RUN pip install -e . --no-deps
 EXPOSE 7860
 
 # Default = server. Override CMD to run training.
-# CMD ["uvicorn", "openenv_compliance_audit.server:app", "--host", "0.0.0.0", "--port", "7860"]
-CMD ["python", "train.py"]
+CMD ["uvicorn", "openenv_compliance_audit.server:app", "--host", "0.0.0.0", "--port", "7860"]
+# CMD ["python", "train.py"]
