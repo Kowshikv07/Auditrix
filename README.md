@@ -18,6 +18,12 @@ tags:
 
 > **A real-world AI agent environment for performing iterative compliance audits on structured organisational records.**
 
+![Auditrix Logo](assets/Auditrix-logo.png)
+
+### Architecture Diagram
+
+![Auditrix Architecture](assets/Auditrix.png)
+
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
 [![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://kowshik147-auditrix.hf.space)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)

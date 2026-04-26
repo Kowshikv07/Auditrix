@@ -1,5 +1,11 @@
 # Auditrix: Training LLMs to Actually Do Compliance Audits
 
+![Auditrix Logo](assets/Auditrix-logo.png)
+
+## Architecture Diagram
+
+![Auditrix Architecture](assets/Auditrix.png)
+
 ## Why We Built This
 
 This project started from one uncomfortable observation.
