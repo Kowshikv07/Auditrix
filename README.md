@@ -19,9 +19,20 @@ tags:
 > **A real-world AI agent environment for performing iterative compliance audits on structured organisational records.**
 
 [![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
-[![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://huggingface.co/spaces)
+[![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://kowshik147-auditrix.hf.space)
 [![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-configured-brightgreen)]()
+[![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)](#2-unit-tests)
+
+---
+
+## Project Links
+
+- GitHub Repository: https://github.com/Kowshikv07/Auditrix
+- HF Space (Live App): https://kowshik147-auditrix.hf.space
+- HF Space Repository: https://huggingface.co/spaces/kowshik147/Auditrix
+- HF Space README: https://huggingface.co/spaces/kowshik147/Auditrix/blob/main/README.md
+- Training Notebook: https://github.com/Kowshikv07/Auditrix/blob/phase2/Auditrix_GRPO_Training.ipynb
+- Model / Adapter: https://huggingface.co/<your-hf-username>/<your-model-or-adapter>
 
 ---
 
@@ -528,18 +539,12 @@ Dry run passed. Environment and reward function are working.
 
 ---
 
-### Interactive Model Leaderboard Dashboard
+## Dashboard
 
-Visualize model performance rankings with an interactive Streamlit dashboard.
+Open the interactive dashboard after starting the server:
 
-```bash
-# Install dashboard dependencies (if not already installed)
-pip install streamlit plotly
-
-# Run the dashboard
-streamlit run dashboard.py
-
-# Open in browser (usually http://localhost:8501)
+```text
+http://localhost:7860/dashboard
 ```
 
 **Dashboard Features:**
@@ -631,7 +636,7 @@ openenv/
 ### 2) Unit tests
 
 ```text
-[placeholder]
+62 passed in 12.83s
 ```
 
 ### 3) Docker build
