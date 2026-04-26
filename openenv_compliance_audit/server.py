@@ -1145,7 +1145,7 @@ curl -X POST http://localhost:7860/step \\
 
         <div class="tab-panel" id="panel-simulation">
             <div class="section">
-                <h2>🧪 Simulation Playground <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(interactive reset / step)</span></h2>
+                <h2>Simulation Playground <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(interactive reset / step)</span></h2>
                 <div class="sim-grid">
                     <div class="sim-card">
                         <h3>Episode Controls</h3>
