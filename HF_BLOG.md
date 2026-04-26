@@ -1,71 +1,53 @@
-# Auditrix: Teaching LLMs to Perform Real Compliance Audits with OpenEnv, TRL, and GRPO
+# Auditrix: Training LLMs to Actually Do Compliance Audits
 
-Compliance workflows are one of those problems that look simple from the outside, but become complicated the moment you try to automate them safely.  
-An auditor is not just checking a list. They are balancing recall and precision, handling exemptions, comparing across records, adapting to policy changes, and writing an accountable final report.
+## Why We Built This
 
-That is exactly what we wanted to train for.
+This project started from one uncomfortable observation.
 
-`Auditrix` is our OpenEnv environment for reinforcement learning on professional compliance tasks.  
-Instead of training an LLM to produce one static answer, we train it to act in a structured loop: inspect records, evaluate rules, gather evidence, flag violations, and generate an audit report under a step budget.
+When we asked strong LLMs to do compliance audits, the answers looked polished and confident, but the decision quality was often brittle. They would miss cross-record violations, over-flag exempt cases, or produce final reports that contradicted their own earlier actions.
 
----
+That gap mattered to us because compliance is not a style task. It is a decision task.
 
-## Hackathon Problem Statement Alignment
+In real audits, every false positive burns trust, every missed violation can be expensive, and every final report must be traceable. So instead of asking an LLM to "write an audit," we built an environment where the model has to behave like an auditor under constraints.
 
-Auditrix is positioned with:
+That environment is Auditrix.
 
-- **Primary theme:** **#3.1 World Modeling (Professional Tasks)**
-- **Secondary theme:** **#2 (Super) Long-Horizon Planning & Instruction Following**
-
-### Primary: Theme #3.1 World Modeling (Professional Tasks)
-
-We primarily target Theme #3.1 through:
-
-- tool-based professional workflows (`inspect`, `apply_rule`, `flag`, `report`),
-- partially observable state that updates over time,
-- deterministic rule verification with evidence traces,
-- and dynamic environment events that require belief updates and action re-planning.
-
-This setup tests whether an agent can maintain a consistent world model while operating in a realistic enterprise compliance process, not just generate fluent text.
-
-### Secondary: Theme #2 (Super) Long-Horizon Planning & Instruction Following
-
-We cover Theme #2 through:
-
-- long multi-step episodes with strict step budgets,
-- sparse terminal-focused reward structure (plus low-magnitude shaping in streaming),
-- mandatory strategy declaration via `prioritize_rules`,
-- and delayed consequences from dynamic events (policy updates and record amendments).
-
-In practice, this forces agents to plan early, allocate steps strategically, and recover from suboptimal earlier actions instead of relying on shallow one-step heuristics.
+Our north star was simple: if an agent can learn to make reliable, auditable decisions in this setting, we are moving from fluent text generation toward operational reasoning.
 
 ---
 
-## The Problem We Targeted
+## One-Line Summary
 
-Most benchmark-style RL environments are either:
-
-- too toy-like to reflect enterprise constraints, or
-- hard to verify objectively at scale.
-
-Compliance auditing gives us the best of both worlds:
-
-- **high practical relevance** (SOX, GDPR, HR controls),
-- **objective verifiability** (deterministic rules and graders),
-- **multi-step decision-making** (not one-shot QA),
-- and **real failure costs** (false positives and missed violations).
-
-Our core hypothesis: if we can train agents to handle this domain well, we are also improving broader capabilities in long-horizon planning, state tracking, and calibrated tool use.
+Auditrix is an OpenEnv-compatible reinforcement learning environment for enterprise compliance auditing, where agents must inspect records, apply rules, gather evidence, flag or retract violations, and submit a consistent final report under a strict step budget.
 
 ---
 
-## What Auditrix Simulates
+## Hackathon Positioning
 
-Auditrix models a professional audit lifecycle in an OpenEnv-compatible interface.
+### Primary Theme: #3.1 World Modeling (Professional Tasks)
 
-### Agent action space
+Auditrix is built around a realistic professional workflow where the world evolves during execution.
+The agent must act under partial observability, use deterministic tools, and maintain a coherent state over many decisions.
+Performance is evaluated on accountable actions, not polished one-shot text outputs.
 
-The agent can:
+### Secondary Theme: #2 Long-Horizon Planning & Instruction Following
+
+Episodes are long, constrained by strict step budgets, and include delayed consequences.
+The streaming task emphasizes sparse terminal-heavy reward, while dynamic events force online re-planning.
+The required `prioritize_rules` action also tests whether declared strategy is actually followed in behavior.
+
+### What This Demonstrates
+
+- Real professional-task competence instead of single-turn answer quality
+- Strategic planning and triage under hard budget constraints
+- Robust adaptation to policy changes, outages, and record amendments
+- Reproducible, diagnosable evaluation through structured metrics and failure modes
+
+---
+
+## What the Agent Can Actually Do
+
+At each step, the agent selects one action from a constrained interface:
 
 - `inspect_record`
 - `apply_rule`
@@ -76,166 +58,214 @@ The agent can:
 - `prioritize_rules`
 - `generate_report`
 
-This keeps behavior explicit and auditable. No hidden shortcuts.
-
-### Task suite
-
-We include 8 tasks across increasing difficulty:
-
-- **Easy/Medium**: deterministic starter audits for bootstrapping behavior
-- **Domain audits**: SOX, GDPR, and data-integrity scenarios
-- **Extreme stress test**: multi-rule, event-heavy audit with dynamic world updates
-- **Streaming long-horizon**: 350 records, 400-step budget, sparse terminal-focused reward with low per-step shaping
-
-### Rule coverage
-
-Rules span labor law, payroll bands, data integrity, governance, and privacy:
-
-- minors/intern overtime limits,
-- salary-band validation,
-- duplicate IDs,
-- expired contracts,
-- background checks,
-- compliance training,
-- GDPR consent,
-- missing mandatory fields,
-- manager reference integrity.
-
-Depending on task, active rules are selected from R1-R11.
+There are no hidden shortcuts and no free-form "explain your reasoning" loopholes for reward hacking. Every action is explicit, logged, and gradable.
 
 ---
 
-## Why This Is Challenging for an LLM Agent
+## Task Inventory
 
-Auditrix is intentionally built to stress agent weaknesses that matter in production:
+Auditrix currently includes 8 tasks, intentionally ordered from clean starter scenarios to high-noise operational stress tests:
 
-1. **Exemption logic**  
-   The best action is often to *not* flag a rule.
+- `easy_basic_audit`
+- `medium_mixed_audit`
+- `hard_complex_audit`
+- `finance_sox_audit`
+- `gdpr_privacy_audit`
+- `data_integrity_audit`
+- `regulatory_storm_audit`
+- `streaming_long_horizon`
 
-2. **Cross-record reasoning**  
-   Some violations are only visible when comparing multiple records.
+### Difficulty progression
 
-3. **Dynamic events**  
-   Policy thresholds can change mid-episode, records can be amended, and temporary outages can block access.
+- Easy and medium tasks teach the agent to ground actions in rules and evidence.
+- Hard and domain audits introduce ambiguity, overlapping violations, and practical tradeoffs.
+- Extreme and streaming tasks force long-horizon planning under changing state and tighter budget pressure.
 
-4. **Long-horizon planning**  
-   A naive inspect-everything policy fails under strict step budgets.
+### Long-horizon stress case
 
-5. **Report accountability**  
-   Final reports are scored for consistency and completeness, not just presence.
+- `streaming_long_horizon`
+- 350 records
+- 400-step budget
+- all major rule families active
+- designed for strategic sampling, memory, and delayed-reward robustness
 
----
-
-## Reward Design: Multi-Signal by Construction
-
-We avoided single-number reward design because it is fragile and easy to game.
-
-Instead, we train on multiple independent reward signals, including:
-
-- overall task score,
-- severity-weighted detection,
-- precision / false-positive behavior,
-- coverage,
-- efficiency,
-- prioritization quality,
-- deliberation quality (`request_evidence` usage),
-- anti-exploit penalties.
-
-This gives us two benefits:
-
-- stronger training signal,
-- better observability when behavior regresses or starts exploiting loopholes.
+This task is where weak policies usually collapse: either they over-inspect and run out of budget, or they under-inspect and miss critical violations.
 
 ---
 
-## Training Stack
+## Rule Coverage and Why It Is Non-Trivial
 
-Auditrix is trained with:
+Auditrix uses a dynamic rule framework.
+Each task activates a different subset of rule families, and runtime policy updates can change how rules are evaluated mid-episode.
+The current benchmark ships with a base catalog of rules, but the environment is designed to scale to additional rules without changing the agent interface.
 
-- **OpenEnv** for standardized environment interaction,
-- **HF TRL (GRPO)** for policy optimization,
-- **Unsloth** for efficiency on supported GPU setups,
-- and a **HF Transformers + PEFT fallback** (`--no-unsloth`) for incompatible systems.
+Rule families include:
 
-This made it straightforward to run fast experiments and still keep a reproducible baseline path.
+- minor and intern overtime constraints
+- salary band validation by role
+- duplicate employee identifiers
+- contract and eligibility checks
+- compliance training requirements
+- GDPR consent and field integrity
+- manager/reference consistency checks
 
----
-
-## What We Observed
-
-### Baseline (before RL)
-
-Strong instruct models can perform reasonably on simpler audits, but we consistently see:
-
-- missed multi-rule violations,
-- low coverage on harder tasks,
-- brittle behavior when dynamic events fire,
-- and weaker report consistency.
-
-### After RL fine-tuning
-
-We see improvements in:
-
-- structured, repeatable audit trajectories,
-- higher useful violation recall without runaway false positives,
-- better final report quality and internal consistency,
-- more stable behavior under delayed/sparse reward conditions.
-
-> Replace with your measured metrics from final run:
->
-> - Baseline average score: **[X.XX]**
-> - Trained average score: **[Y.YY]**
-> - Relative improvement: **[+Z%]**
-> - Biggest gain task: **[TASK_NAME, +N.NN]**
+The complexity comes from interaction effects. A rule that appears clear in isolation can flip under exemptions, policy updates, or cross-record evidence. That means agents must maintain live context, not just run static if-else checks.
 
 ---
 
-## Why This Matters Beyond the Hackathon
+## Why This Environment Is Genuinely Hard
 
-Auditrix is a practical testbed for training **auditable decision agents**, not just fluent text generators.
+### 1) Exemption-sensitive precision
 
-Potential downstream uses:
+The correct action is often "do not flag." Agents that over-generalize patterns collapse on precision.
 
-- compliance copilot evaluation,
-- internal control monitoring,
-- policy-constrained workflow automation,
-- trustworthy AI benchmarking for enterprise operations.
+### 2) Cross-record state tracking
 
-More broadly, this project shows how RL can improve domain behavior when:
+Some violations only emerge from comparisons across records. Single-record heuristics fail.
 
-- actions are explicit,
-- verification is objective,
-- and reward design reflects real operational priorities.
+### 3) Dynamic world updates
 
----
+Mid-episode events can alter policy thresholds, amend records, or suspend access. Strategies must adapt online.
 
-## Reproducibility and Artifacts
+### 4) Long-horizon budget pressure
 
-- Environment (HF Space): **[PASTE_SPACE_URL]**
-- Code repository: **[PASTE_REPO_URL]**
-- Training notebook: **[PASTE_COLAB_OR_IPYNB_URL]**
-- Trained model/adapters: **[PASTE_MODEL_URL]**
-- Training plots (reward/loss/before-after): **[PASTE_ARTIFACT_URL]**
-- Demo video or short presentation: **[PASTE_VIDEO_OR_SLIDES_URL]**
+Inspect-everything behavior does not scale. Agents must prioritize, triage, and recover from early mistakes.
+
+### 5) Report accountability
+
+Final reports are judged for consistency with trajectory state, not just presence or formatting.
+
+In practice, this is the key difference from many prompt-only benchmarks: the model is evaluated on the full chain of decisions, not on how persuasive the final paragraph sounds.
 
 ---
 
-## Suggested 2-Minute Demo Flow
+## Technical Deep Dive
 
-For quick review, we recommend this sequence:
+### Environment mechanics
 
-1. Run baseline on one medium and one hard task.
-2. Show reward/grader outputs.
-3. Run trained model on same seeded tasks.
-4. Compare score, precision, coverage, and report quality.
-5. Highlight anti-exploit behavior and dynamic event handling.
+OpenEnv-style lifecycle:
 
-This makes the learning effect obvious in under two minutes.
+- `reset(task_id, seed)` initializes records and deterministic event schedule
+- `step(action)` applies action effects, reward shaping, event updates, and termination logic
+- `state()` exposes auditable internal episode state for evaluation and debugging
+
+Dynamic events include:
+
+- `POLICY_UPDATE`
+- `SYSTEM_OUTAGE`
+- `RECORD_AMENDMENT`
+
+### A typical episode (what actually happens)
+
+1. The agent declares strategy via `prioritize_rules`.
+2. It inspects a focused subset of records and runs targeted rule checks.
+3. Mid-episode, a policy threshold may change or records may be amended.
+4. The agent must revise earlier assumptions, retract or add flags, and preserve precision.
+5. It generates a final report that is checked against the true trajectory state.
+
+If the report disagrees with what the agent actually did, the system penalizes that inconsistency.
+
+### Reward model
+
+Per-step reward is clamped to [-1, 1].
+
+Core design combines action-level shaping with terminal quality signals:
+
+- positive shaping for useful progress
+- penalties for redundant or exploit-like loops
+- terminal bonus tied to task score
+- optional report-quality bonus
+- consistency penalty if submitted report contradicts environment state
+
+This lets us reward good local behavior without losing focus on final audit quality.
+
+### Grader model
+
+Terminal task score is normalized to [0, 1] and computed from weighted components:
+
+- severity-weighted detection
+- false-positive behavior
+- coverage
+- efficiency
+- prioritization quality
+- warning and abstention behavior
+- anti-loop deductions
+
+Difficulty-specific graders adjust weights and caps to reflect task intent. Extreme/streaming variants enforce stricter caps under poor precision or low coverage.
+
+### Anti-exploit design
+
+- sliding-window loop detection
+- explicit penalty for repetitive degenerate patterns
+- hard caps under pathological false-positive or low-coverage behavior
+- report consistency checks to prevent post-hoc narrative fabrication
+
+### Determinism and reproducibility
+
+- task definitions are fixed and explicit
+- event schedules are deterministic by task plus seed
+- metrics and failure modes are emitted in structured outputs
+
+This gives us an important property for research and debugging: when performance changes, we can replay the same scenario and inspect exactly where behavior diverged.
+
+---
+
+## Training Stack and Pipeline
+
+We train with:
+
+- OpenEnv for standardized interaction
+- HF TRL (GRPO) + Unsloth as the primary training path
+- Transformers + PEFT as a compatibility fallback via `--no-unsloth`
+
+Practical workflow:
+
+1. Run baseline inference sweeps on selected seeded tasks.
+2. Train with GRPO against multi-signal reward.
+3. Re-run evaluation on the same seeded slices.
+4. Compare score, precision, coverage, consistency, and failure-mode distribution.
+
+Using a fallback path mattered in practice: it kept experiments portable when hardware or kernel constraints made the accelerated route unavailable.
+
+---
+
+## What We Observed So Far
+
+### Before RL
+
+- Short tasks looked acceptable, but stability degraded as horizon and event complexity increased.
+- Policies often over-indexed on local signals, then broke consistency later in the episode.
+- Under pressure, behavior tended to split into two failure modes: under-flagging or precision collapse.
+
+### After RL
+
+- Action trajectories became more structured and repeatable.
+- Recall improved without the same level of precision collapse.
+- Report quality aligned better with actual episode history.
+- Adaptation improved in delayed/sparse-reward settings.
+
+### Current benchmark snapshot
+
+- total logged runs: 54
+- observed models: Qwen2.5-72B-Instruct, Llama-3.1-70B-Instruct, Mistral-Large-Instruct-2407
+- top mean score in current logs: about 0.454
+
+Final trained-vs-baseline deltas will be added after the complete eval sweep.
+
+## Honest Limitations
+
+- Time constraints limited the number of full training and evaluation rounds we could run.
+- Model learning capability is still bounded: agents improve, but can plateau on complex cross-record reasoning and hard long-horizon edge cases.
+- The current benchmark snapshot is informative but not yet a full ablation study across all tasks and seeds.
+
+These limitations are not deal-breakers, but they are important context for interpreting current results.
 
 ---
 
 ## Closing
 
-Auditrix is our attempt to move LLM RL from toy tasks toward real operational reasoning: constrained actions, delayed outcomes, and auditable decisions.
+Auditrix is our attempt to push LLM RL beyond toy tasks into auditable operational reasoning.
 
-If you are building similar professional-task RL environments, we would love to compare methods and results.
+The biggest lesson for us is that training is only half the problem. The harder half is environment design: making tasks realistic enough to matter, difficult enough to resist shortcut gaming, and structured enough to grade objectively.
+
+If this direction resonates, we would love to collaborate with other teams building professional-task RL benchmarks.

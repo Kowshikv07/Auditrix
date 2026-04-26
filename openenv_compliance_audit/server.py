@@ -18,6 +18,16 @@ from .tasks import TASKS
 import uvicorn
 
 
+# Update these once your public artifacts are available.
+PROJECT_LINKS = {
+    "repo": "https://github.com/Kowshikv07/Auditrix",
+    "hf_space": "https://huggingface.co/spaces/<your-hf-username>/Auditrix",
+    "hf_space_readme": "https://huggingface.co/spaces/<your-hf-username>/Auditrix/blob/main/README.md",
+    "training_notebook": "https://colab.research.google.com/<your-notebook>",
+    "model": "https://huggingface.co/<your-hf-username>/<your-model-or-adapter>"
+}
+
+
 class ResetRequest(BaseModel):
     task_id: str | None = Field(default=None)
     seed: int | None = Field(default=None)
@@ -1182,6 +1192,19 @@ def dashboard_html() -> HTMLResponse:
             <p style="margin-top:12px;font-size:0.83rem;color:var(--text2)">POST: <code>/reset</code> &nbsp;·&nbsp; <code>/step</code></p>
         </div>
 
+        <!-- Project Links -->
+        <div class="section">
+            <h2>🔗 Project Links</h2>
+            <div class="api-links">
+                <a href="__LINK_REPO__" class="api-link" target="_blank" rel="noopener noreferrer">GitHub Repository</a>
+                <a href="__LINK_SPACE__" class="api-link" target="_blank" rel="noopener noreferrer">HF Space</a>
+                <a href="__LINK_SPACE_README__" class="api-link" target="_blank" rel="noopener noreferrer">HF Space README</a>
+                <a href="__LINK_NOTEBOOK__" class="api-link" target="_blank" rel="noopener noreferrer">Training Notebook</a>
+                <a href="__LINK_MODEL__" class="api-link" target="_blank" rel="noopener noreferrer">Model / Adapter</a>
+            </div>
+            <p style="margin-top:12px;font-size:0.83rem;color:var(--text2)">Set these URLs in <code>PROJECT_LINKS</code> inside <code>openenv_compliance_audit/server.py</code>.</p>
+        </div>
+
         <!-- Quick Start -->
         <div class="section">
             <h2>Quick Start</h2>
@@ -1222,7 +1245,7 @@ curl -X POST http://localhost:7860/step \\
         </div>
 
         <div class="footer">
-            <p>Auditrix &nbsp;·&nbsp; <a href="https://github.com/Kowshikv07/Auditrix">GitHub</a> &nbsp;·&nbsp; OpenEnv Framework &nbsp;·&nbsp; 62 tests passing  </p>
+            <p>Auditrix &nbsp;·&nbsp; <a href="__LINK_REPO__" target="_blank" rel="noopener noreferrer">GitHub</a> &nbsp;·&nbsp; <a href="__LINK_SPACE__" target="_blank" rel="noopener noreferrer">HF Space</a> &nbsp;·&nbsp; OpenEnv Framework</p>
         </div>
         </div>
 
@@ -1410,6 +1433,13 @@ curl -X POST http://localhost:7860/step \\
     html_content = html_content.replace("__COMPARE_ROWS__", compare_rows)
     html_content = html_content.replace("__LATEST_TIMESTAMP__", escape(latest_timestamp))
     html_content = html_content.replace("__MODEL_COMPARISON_ROWS__", model_rows)
+    html_content = html_content.replace("__LINK_REPO__", escape(PROJECT_LINKS["repo"]))
+    html_content = html_content.replace("__LINK_SPACE__", escape(PROJECT_LINKS["hf_space"]))
+    html_content = html_content.replace("__LINK_SPACE_README__", escape(PROJECT_LINKS["hf_space_readme"]))
+    html_content = html_content.replace("__LINK_NOTEBOOK__", escape(PROJECT_LINKS["training_notebook"]))
+    html_content = html_content.replace("__LINK_MODEL__", escape(PROJECT_LINKS["model"]))
+    html_content = html_content.replace("__LINK_ARTIFACTS__", escape(PROJECT_LINKS["eval_artifacts"]))
+    html_content = html_content.replace("__LINK_VIDEO__", escape(PROJECT_LINKS["demo_video"]))
     return HTMLResponse(content=html_content)
 
 
