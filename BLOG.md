@@ -6,6 +6,14 @@
 
 ![Auditrix Architecture](assets/Auditrix.png)
 
+## Project Links
+
+- GitHub Repository: https://github.com/Kowshikv07/Auditrix
+- HF Space: https://huggingface.co/spaces/Kowshik147/Auditrix
+- HF Space README: https://huggingface.co/spaces/Kowshik147/Auditrix/blob/main/README.md
+- Training Notebook: https://www.kaggle.com/code/kowshikv14/auditrix?scriptVersionId=314553752
+- Presentation: https://canva.link/507528ayd2q90oc
+
 ## Why We Built This
 
 This project started from one uncomfortable observation.

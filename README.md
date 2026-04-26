@@ -24,21 +24,17 @@ tags:
 
 ![Auditrix Architecture](assets/Auditrix.png)
 
-[![OpenEnv Compatible](https://img.shields.io/badge/OpenEnv-compatible-blue)](https://github.com/huggingface/openenv)
-[![HF Space](https://img.shields.io/badge/🤗%20Space-live-yellow)](https://kowshik147-auditrix.hf.space)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker)](./Dockerfile)
-[![Tests](https://img.shields.io/badge/tests-62%20passed-brightgreen)](#2-unit-tests)
+OpenEnv Compatible | HF Space Live | Docker Ready | Tests Passing
 
 ---
 
 ## Project Links
 
 - GitHub Repository: https://github.com/Kowshikv07/Auditrix
-- HF Space (Live App): https://kowshik147-auditrix.hf.space
-- HF Space Repository: https://huggingface.co/spaces/kowshik147/Auditrix
-- HF Space README: https://huggingface.co/spaces/kowshik147/Auditrix/blob/main/README.md
-- Training Notebook: https://github.com/Kowshikv07/Auditrix/blob/phase2/Auditrix_GRPO_Training.ipynb
-- Model / Adapter: https://huggingface.co/<your-hf-username>/<your-model-or-adapter>
+- HF Space: https://huggingface.co/spaces/Kowshik147/Auditrix
+- HF Space README: https://huggingface.co/spaces/Kowshik147/Auditrix/blob/main/README.md
+- Training Notebook: https://www.kaggle.com/code/kowshikv14/auditrix?scriptVersionId=314553752
+- Presentation: https://canva.link/507528ayd2q90oc
 
 ---
 
@@ -405,15 +401,15 @@ python -m pip install -e .
 uvicorn openenv_compliance_audit.server:app --host 0.0.0.0 --port 7860
 
 # List available tasks
-curl http://localhost:7860/tasks
+curl <LOCAL_SERVER>/tasks
 
 # Reset and start an episode
-curl -X POST http://localhost:7860/reset \
+curl -X POST <LOCAL_SERVER>/reset \
   -H "Content-Type: application/json" \
   -d '{"task_id": "finance_sox_audit"}'
 
 # Take a step
-curl -X POST http://localhost:7860/step \
+curl -X POST <LOCAL_SERVER>/step \
   -H "Content-Type: application/json" \
   -d '{"action_type": "inspect_record", "record_id": "F001"}'
 
@@ -434,8 +430,8 @@ docker build -t openenv-compliance-audit .
 docker run --rm -p 7860:7860 --name openenv-audit openenv-compliance-audit
 
 # In another terminal, verify endpoints
-curl -sS http://localhost:7860/tasks
-curl -sS http://localhost:7860/health
+curl -sS <LOCAL_SERVER>/tasks
+curl -sS <LOCAL_SERVER>/health
 
 # Optional: stop container (if not using --rm)
 docker stop openenv-audit
@@ -449,7 +445,7 @@ you are running `docker build` from the wrong directory. `cd` into this repo roo
 ```bash
 pip install openai   # if not already installed
 
-export API_BASE_URL="https://router.huggingface.co/v1"
+export API_BASE_URL="<HF_ROUTER_ENDPOINT>"
 export MODEL_NAME="Qwen/Qwen2.5-72B-Instruct"
 export HF_TOKEN="hf_..."
 
@@ -465,7 +461,7 @@ python3 inference.py --seeds 3
 
 ### GRPO Training (Reinforcement Learning)
 
-Train a small model to perform compliance audits using **Group Relative Policy Optimization (GRPO)** with [Unsloth](https://github.com/unslothai/unsloth) + [TRL](https://github.com/huggingface/trl).
+Train a small model to perform compliance audits using **Group Relative Policy Optimization (GRPO)** with Unsloth + TRL.
 
 The training uses TRL's `environment_factory` pattern — each Auditrix action (inspect, apply_rule, flag, mark_compliant, generate_report) is exposed as a **callable tool** that the model learns to invoke correctly through multi-turn interaction.
 
@@ -550,7 +546,7 @@ Dry run passed. Environment and reward function are working.
 Open the interactive dashboard after starting the server:
 
 ```text
-http://localhost:7860/dashboard
+<LOCAL_SERVER>/dashboard
 ```
 
 **Dashboard Features:**
@@ -680,10 +676,10 @@ Local Docker run endpoint checks:
 ```bash
 docker build -t auditrix-check .
 docker run -d -p 7861:7860 --name auditrix-check-run auditrix-check
-curl -sS -i http://localhost:7861/health
-curl -sS -i http://localhost:7861/tasks
-curl -sS -i -X POST http://localhost:7861/reset -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'
-curl -sS -i -X POST http://localhost:7861/step -H "Content-Type: application/json" -d '{"action_type":"inspect_record","record_id":"E001"}'
+curl -sS -i <LOCAL_CONTAINER>/health
+curl -sS -i <LOCAL_CONTAINER>/tasks
+curl -sS -i -X POST <LOCAL_CONTAINER>/reset -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'
+curl -sS -i -X POST <LOCAL_CONTAINER>/step -H "Content-Type: application/json" -d '{"action_type":"inspect_record","record_id":"E001"}'
 docker stop auditrix-check-run
 ```
 
@@ -691,7 +687,7 @@ docker stop auditrix-check-run
 
 ```text
 Verified live Space runtime URL:
-https://kowshik147-auditrix.hf.space
+<HF_SPACE_RUNTIME_URL>
 
 Endpoint checks:
 - GET /health -> HTTP 200
@@ -700,7 +696,7 @@ Endpoint checks:
 ```
 
 ```bash
-export SPACE_URL="https://kowshik147-auditrix.hf.space"
+export SPACE_URL="<HF_SPACE_RUNTIME_URL>"
 curl -sS -i "$SPACE_URL/health"
 curl -sS -i "$SPACE_URL/tasks"
 curl -sS -i -X POST "$SPACE_URL/reset" -H "Content-Type: application/json" -d '{"task_id":"easy_basic_audit"}'

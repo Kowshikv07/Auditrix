@@ -21,10 +21,10 @@ import uvicorn
 # Update these once your public artifacts are available.
 PROJECT_LINKS = {
     "repo": "https://github.com/Kowshikv07/Auditrix",
-    "hf_space": "https://huggingface.co/spaces/<your-hf-username>/Auditrix",
-    "hf_space_readme": "https://huggingface.co/spaces/<your-hf-username>/Auditrix/blob/main/README.md",
-    "training_notebook": "https://colab.research.google.com/<your-notebook>",
-    "model": "https://huggingface.co/<your-hf-username>/<your-model-or-adapter>"
+    "hf_space": "https://huggingface.co/spaces/Kowshik147/Auditrix",
+    "hf_space_readme": "https://huggingface.co/spaces/Kowshik147/Auditrix/blob/main/README.md",
+    "training_notebook": "https://www.kaggle.com/code/kowshikv14/auditrix?scriptVersionId=314553752",
+    "ppt": "https://canva.link/507528ayd2q90oc"
 }
 
 
@@ -522,9 +522,6 @@ def dashboard_html() -> HTMLResponse:
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <meta name="description" content="Auditrix — AI agent benchmark for compliance auditing with dynamic incident mechanics">
-        <link rel="preconnect" href="https://fonts.googleapis.com">
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
         <style>
             *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
             :root {
@@ -1200,7 +1197,7 @@ def dashboard_html() -> HTMLResponse:
                 <a href="__LINK_SPACE__" class="api-link" target="_blank" rel="noopener noreferrer">HF Space</a>
                 <a href="__LINK_SPACE_README__" class="api-link" target="_blank" rel="noopener noreferrer">HF Space README</a>
                 <a href="__LINK_NOTEBOOK__" class="api-link" target="_blank" rel="noopener noreferrer">Training Notebook</a>
-                <a href="__LINK_MODEL__" class="api-link" target="_blank" rel="noopener noreferrer">Model / Adapter</a>
+                <a href="__LINK_PPT__" class="api-link" target="_blank" rel="noopener noreferrer">Presentation</a>
             </div>
             <p style="margin-top:12px;font-size:0.83rem;color:var(--text2)">Set these URLs in <code>PROJECT_LINKS</code> inside <code>openenv_compliance_audit/server.py</code>.</p>
         </div>
@@ -1210,22 +1207,22 @@ def dashboard_html() -> HTMLResponse:
             <h2>Quick Start</h2>
             <p style="margin-bottom:10px;color:var(--text2);font-size:0.85rem;">Run an episode with dynamic event awareness:</p>
             <pre># 1. Reset with a seed (for reproducible event schedule)
-curl -X POST http://localhost:7860/reset \\
+curl -X POST /reset \\
   -H "Content-Type: application/json" \\
   -d '{"task_id": "regulatory_storm_audit", "seed": 42}'
 
 # 2. Inspect a record
-curl -X POST http://localhost:7860/step \\
+curl -X POST /step \\
   -H "Content-Type: application/json" \\
   -d '{"action_type": "inspect_record", "record_id": "RS001"}'
 
 # 3. Apply a rule (returns reason_codes + evidence)
-curl -X POST http://localhost:7860/step \\
+curl -X POST /step \\
   -H "Content-Type: application/json" \\
   -d '{"action_type": "apply_rule", "record_id": "RS001", "rule_id": "R1"}'
 
 # 4. Submit final report with audit_confidence section
-curl -X POST http://localhost:7860/step \\
+curl -X POST /step \\
   -H "Content-Type: application/json" \\
   -d '{
     "action_type": "generate_report",
@@ -1437,9 +1434,7 @@ curl -X POST http://localhost:7860/step \\
     html_content = html_content.replace("__LINK_SPACE__", escape(PROJECT_LINKS["hf_space"]))
     html_content = html_content.replace("__LINK_SPACE_README__", escape(PROJECT_LINKS["hf_space_readme"]))
     html_content = html_content.replace("__LINK_NOTEBOOK__", escape(PROJECT_LINKS["training_notebook"]))
-    html_content = html_content.replace("__LINK_MODEL__", escape(PROJECT_LINKS["model"]))
-    html_content = html_content.replace("__LINK_ARTIFACTS__", escape(PROJECT_LINKS["eval_artifacts"]))
-    html_content = html_content.replace("__LINK_VIDEO__", escape(PROJECT_LINKS["demo_video"]))
+    html_content = html_content.replace("__LINK_PPT__", escape(PROJECT_LINKS["ppt"]))
     return HTMLResponse(content=html_content)
 
 
