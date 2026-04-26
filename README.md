@@ -528,17 +528,6 @@ Dry run passed. Environment and reward function are working.
 
 ---
 
-### Interactive Model Leaderboard Dashboard
-
-Visualize model performance rankings with an interactive Streamlit dashboard.
-
-```bash
-# Install dashboard dependencies (if not already installed)
-pip install streamlit plotly
-
-# Run the dashboard
-streamlit run dashboard.py
-
 # Open in browser (usually http://localhost:8501)
 ```
 

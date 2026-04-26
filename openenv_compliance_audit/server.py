@@ -230,6 +230,13 @@ def dashboard_html() -> HTMLResponse:
     """Return HTML dashboard for visualizing model performance."""
     logs_file = Path(__file__).resolve().parent.parent / "model-benchmark-logs" / "inference_runs.jsonl"
     model_rows = ""
+    baseline_rows = ""
+    task_rows = ""
+    leaderboard_rows = ""
+    parsed_runs: List[Dict[str, Any]] = []
+    latest_by_task: Dict[str, Dict[str, Any]] = {}
+    latest_timestamp = "-"
+    models: set[str] = set()
 
     if logs_file.exists():
         with open(logs_file, "r", encoding="utf-8") as f:
@@ -241,6 +248,21 @@ def dashboard_html() -> HTMLResponse:
                     item = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
+                parsed_runs.append(item)
+                ts = str(item.get("timestamp", ""))
+                if ts and (latest_timestamp == "-" or ts > latest_timestamp):
+                    latest_timestamp = ts
+
+                task_id = str(item.get("task_id", ""))
+                model_name = str(item.get("model", ""))
+                if model_name:
+                    models.add(model_name)
+                if task_id:
+                    prev = latest_by_task.get(task_id)
+                    prev_ts = str(prev.get("timestamp", "")) if prev else ""
+                    if prev is None or ts > prev_ts:
+                        latest_by_task[task_id] = item
 
                 rewards = item.get("rewards", [])
                 if isinstance(rewards, list):
@@ -254,9 +276,13 @@ def dashboard_html() -> HTMLResponse:
 
                 failure_mode = item.get("failure_mode", "—")
                 seed_val = item.get("seed", "—")
+                failure_slug = str(failure_mode).lower().replace(" ", "_")
 
                 model_rows += (
-                    "<tr class=\"mc-row\">"
+                    "<tr class=\"mc-row\" "
+                    f"data-task=\"{escape(task_id.lower())}\" "
+                    f"data-model=\"{escape(model_name.lower())}\" "
+                    f"data-failure=\"{escape(failure_slug)}\">"
                     f"<td>{escape(str(item.get('timestamp', '')))}</td>"
                     f"<td>{escape(str(item.get('task_id', '')))}</td>"
                     f"<td>{escape(str(item.get('model', '')))}</td>"
@@ -264,7 +290,7 @@ def dashboard_html() -> HTMLResponse:
                     f"<td>{escape(str(item.get('score', '')))}</td>"
                     f"<td>{escape(str(item.get('steps', '')))}</td>"
                     f"<td>{escape(str(item.get('success', '')))}</td>"
-                    f"<td><span class=\"fm-badge fm-{escape(str(failure_mode))}\">{escape(str(failure_mode))}</span></td>"
+                    f"<td><span class=\"fm-badge fm-{escape(failure_slug)}\">{escape(str(failure_mode))}</span></td>"
                     "<td class=\"rewards-cell\">"
                     f"<span class=\"rewards-preview\">{escape(rewards_preview)}</span>"
                     f"<span class=\"rewards-full\">{escape(rewards_full)}</span>"
@@ -274,6 +300,148 @@ def dashboard_html() -> HTMLResponse:
 
     if not model_rows:
         model_rows = "<tr><td colspan=\"9\">No benchmark records found. Run <code>python inference.py</code> to generate data.</td></tr>"
+
+    task_count = len(TASKS)
+    difficulty_count = len({task.difficulty for task in TASKS.values()})
+    rule_count = len({rid for task in TASKS.values() for rid in task.active_rule_ids})
+    total_runs = len(parsed_runs)
+    mean_score = (
+        sum(float(item.get("score", 0.0)) for item in parsed_runs) / total_runs
+        if total_runs
+        else 0.0
+    )
+    success_rate = (
+        (sum(1 for item in parsed_runs if item.get("success") is True) / total_runs) * 100.0
+        if total_runs
+        else 0.0
+    )
+    top_score = max((float(item.get("score", 0.0)) for item in parsed_runs), default=0.0)
+
+    per_model: Dict[str, Dict[str, float]] = {}
+    for item in parsed_runs:
+        m = str(item.get("model", "unknown"))
+        score = float(item.get("score", 0.0))
+        bucket = per_model.setdefault(m, {"count": 0.0, "total": 0.0, "best": 0.0})
+        bucket["count"] += 1.0
+        bucket["total"] += score
+        bucket["best"] = max(bucket["best"], score)
+
+    ranked_models = sorted(
+        per_model.items(),
+        key=lambda kv: (kv[1]["total"] / kv[1]["count"]) if kv[1]["count"] else 0.0,
+        reverse=True,
+    )
+    for idx, (model_name, stats) in enumerate(ranked_models[:8], start=1):
+        avg = (stats["total"] / stats["count"]) if stats["count"] else 0.0
+        leaderboard_rows += (
+            "<tr>"
+            f"<td>{idx}</td>"
+            f"<td>{escape(model_name)}</td>"
+            f"<td><strong>{avg:.3f}</strong></td>"
+            f"<td>{int(stats['count'])}</td>"
+            f"<td>{stats['best']:.3f}</td>"
+            "</tr>"
+        )
+    if not leaderboard_rows:
+        leaderboard_rows = "<tr><td colspan=\"5\">No model leaderboard data yet.</td></tr>"
+
+    difficulty_labels = {
+        "easy": ("pill-easy", "Easy"),
+        "medium": ("pill-medium", "Medium"),
+        "hard": ("pill-hard", "Hard"),
+        "extreme": ("pill-extreme", "Extreme"),
+        "streaming": ("pill-extreme", "Streaming"),
+    }
+
+    def _event_badges(task_id: str) -> str:
+        event_types: set[str] = set()
+        try:
+            probe = ComplianceAuditEnv(task_id=task_id)
+            probe.reset(seed=42)
+            for ev in probe.state().event_schedule:
+                event_types.add(str(ev.event_type.value))
+        except Exception:
+            pass
+
+        if not event_types:
+            return "<span class=\"ev\">NONE</span>"
+
+        badges = []
+        for ev_type in sorted(event_types):
+            if "policy" in ev_type:
+                badges.append('<span class="ev ev-policy">POLICY</span>')
+            elif "outage" in ev_type:
+                badges.append('<span class="ev ev-outage">OUTAGE</span>')
+            elif "amend" in ev_type:
+                badges.append('<span class="ev ev-amend">AMEND</span>')
+            elif "susp" in ev_type:
+                badges.append('<span class="ev ev-policy">SUSPEND</span>')
+            else:
+                badges.append(f'<span class="ev">{escape(ev_type.upper())}</span>')
+        return " ".join(badges)
+
+    for t in TASKS.values():
+        pill_class, pill_label = difficulty_labels.get(t.difficulty, ("pill-medium", t.difficulty.title()))
+        rules_text = ", ".join(t.active_rule_ids)
+        task_rows += (
+            "<tr>"
+            f"<td><code>{escape(t.task_id)}</code></td>"
+            f"<td><span class=\"pill {pill_class}\">{escape(pill_label)}</span></td>"
+            f"<td>{len(t.records)}</td>"
+            f"<td>{escape(rules_text)}</td>"
+            f"<td>{t.max_steps}</td>"
+            f"<td>{_event_badges(t.task_id)}</td>"
+            "</tr>"
+        )
+
+    if not task_rows:
+        task_rows = "<tr><td colspan=\"6\">No task definitions found.</td></tr>"
+
+    for task_id, task in TASKS.items():
+        pill_class, pill_label = difficulty_labels.get(task.difficulty, ("pill-medium", task.difficulty.title()))
+        latest = latest_by_task.get(task_id)
+        if latest is None:
+            baseline_rows += (
+                "<tr>"
+                f"<td><code>{escape(task_id)}</code></td>"
+                f"<td><span class=\"pill {pill_class}\">{escape(pill_label)}</span></td>"
+                "<td><strong>-</strong></td>"
+                "<td>-</td>"
+                "</tr>"
+            )
+            continue
+
+        score = float(latest.get("score", 0.0))
+        failure_mode = str(latest.get("failure_mode", "none"))
+        failure_slug = failure_mode.lower().replace(" ", "_")
+        baseline_rows += (
+            "<tr>"
+            f"<td><code>{escape(task_id)}</code></td>"
+            f"<td><span class=\"pill {pill_class}\">{escape(pill_label)}</span></td>"
+            f"<td><strong>{score:.3f}</strong></td>"
+            f"<td><span class=\"fm-badge fm-{escape(failure_slug)}\">{escape(failure_mode)}</span></td>"
+            "</tr>"
+        )
+
+    if latest_by_task:
+        latest_scores = [float(item.get("score", 0.0)) for item in latest_by_task.values()]
+        baseline_rows += (
+            "<tr class=\"avg-row\">"
+            "<td>Overall Average</td>"
+            "<td></td>"
+            f"<td><strong>{(sum(latest_scores) / len(latest_scores)):.3f}</strong></td>"
+            "<td></td>"
+            "</tr>"
+        )
+
+    task_options = "".join(
+        f'<option value="{escape(task_id.lower())}">{escape(task_id)}</option>'
+        for task_id in TASKS.keys()
+    )
+    model_options = "".join(
+        f'<option value="{escape(model_name.lower())}">{escape(model_name)}</option>'
+        for model_name in sorted(models)
+    )
 
     html_content = """
     <!DOCTYPE html>
@@ -285,7 +453,7 @@ def dashboard_html() -> HTMLResponse:
         <meta name="description" content="Auditrix — AI agent benchmark for compliance auditing with dynamic incident mechanics">
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
         <style>
             *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
             :root {
@@ -295,7 +463,7 @@ def dashboard_html() -> HTMLResponse:
                 --border: #e2e5ea;
                 --text: #1a1d23;
                 --text2: #5c6370;
-                --accent: #4361ee;
+                --accent: #0f766e;
                 --accent-light: #eef1fd;
                 --accent-border: #c5cef8;
                 --green: #22c55e;
@@ -313,7 +481,7 @@ def dashboard_html() -> HTMLResponse:
                 --border: #2e3347;
                 --text: #e8eaf0;
                 --text2: #8892a4;
-                --accent: #6c8eff;
+                --accent: #2dd4bf;
                 --accent-light: #1a2240;
                 --accent-border: #2e4180;
                 --green: #4ade80;
@@ -323,7 +491,7 @@ def dashboard_html() -> HTMLResponse:
                 --orange: #fb923c;
             }
             body {
-                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
                 background: var(--bg);
                 color: var(--text);
                 min-height: 100vh;
@@ -332,6 +500,52 @@ def dashboard_html() -> HTMLResponse:
                 font-size: 14px;
             }
             .page { max-width: 1360px; margin: 0 auto; }
+
+            .tabs {
+                display: inline-flex;
+                gap: 6px;
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: 999px;
+                padding: 4px;
+                margin-bottom: 18px;
+                box-shadow: var(--shadow);
+            }
+            .tab-btn {
+                border: 0;
+                background: transparent;
+                color: var(--text2);
+                font-size: 0.82rem;
+                font-weight: 700;
+                padding: 8px 16px;
+                border-radius: 999px;
+                cursor: pointer;
+                transition: all .2s;
+            }
+            .tab-btn.active {
+                background: var(--accent-light);
+                color: var(--accent);
+                border: 1px solid var(--accent-border);
+            }
+            .tab-panel { display: none; }
+            .tab-panel.active { display: block; }
+
+            .overview-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: 14px;
+                margin-bottom: 20px;
+            }
+            .overview-card {
+                background: linear-gradient(160deg, var(--surface), var(--surface2));
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 16px 18px;
+                box-shadow: var(--shadow);
+            }
+            .overview-card .k { font-size: 0.74rem; color: var(--text2); text-transform: uppercase; letter-spacing: .5px; }
+            .overview-card .v { font-size: 1.5rem; margin-top: 4px; font-weight: 800; color: var(--accent); }
+            .overview-card .s { font-size: 0.8rem; margin-top: 5px; color: var(--text2); }
 
             /* ── Header ── */
             .header {
@@ -458,6 +672,11 @@ def dashboard_html() -> HTMLResponse:
                 align-items: center;
                 gap: 8px;
             }
+            .split {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 18px;
+            }
 
             /* ── Tables ── */
             table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
@@ -508,9 +727,114 @@ def dashboard_html() -> HTMLResponse:
 
             /* ── Model comparison table ── */
             .mc-row { cursor: pointer; }
+            .mc-row.hidden { display: none; }
             .mc-row .rewards-full { display: none; }
             .mc-row.expanded .rewards-preview { display: none; }
             .mc-row.expanded .rewards-full { display: inline; word-break: break-word; }
+
+            .controls {
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 12px;
+                align-items: center;
+            }
+            .controls select {
+                border: 1px solid var(--border);
+                background: var(--surface2);
+                color: var(--text);
+                border-radius: 8px;
+                padding: 7px 10px;
+                font-size: 0.82rem;
+            }
+            .controls .meta {
+                color: var(--text2);
+                font-size: 0.8rem;
+                margin-left: auto;
+            }
+
+            .score-chip {
+                display: inline-block;
+                border-radius: 999px;
+                padding: 3px 10px;
+                font-size: 0.74rem;
+                font-weight: 700;
+                background: var(--accent-light);
+                color: var(--accent);
+                border: 1px solid var(--accent-border);
+            }
+
+            .sim-grid {
+                display: grid;
+                grid-template-columns: 320px 1fr;
+                gap: 16px;
+            }
+            .sim-card {
+                background: var(--surface);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+                padding: 16px;
+                box-shadow: var(--shadow);
+            }
+            .sim-card h3 {
+                font-size: 0.92rem;
+                margin-bottom: 10px;
+            }
+            .sim-field {
+                display: flex;
+                flex-direction: column;
+                gap: 5px;
+                margin-bottom: 10px;
+            }
+            .sim-field label {
+                font-size: 0.76rem;
+                color: var(--text2);
+                text-transform: uppercase;
+                letter-spacing: .5px;
+                font-weight: 700;
+            }
+            .sim-field input,
+            .sim-field select,
+            .sim-field textarea {
+                border: 1px solid var(--border);
+                background: var(--surface2);
+                color: var(--text);
+                border-radius: 8px;
+                padding: 8px 10px;
+                font-size: 0.82rem;
+                width: 100%;
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
+            }
+            .sim-field textarea {
+                min-height: 130px;
+                resize: vertical;
+            }
+            .sim-actions {
+                display: flex;
+                gap: 8px;
+                flex-wrap: wrap;
+                margin-top: 8px;
+            }
+            .sim-btn {
+                border: 1px solid var(--accent-border);
+                background: var(--accent-light);
+                color: var(--accent);
+                border-radius: 8px;
+                padding: 8px 12px;
+                font-size: 0.8rem;
+                font-weight: 700;
+                cursor: pointer;
+            }
+            .sim-btn.secondary {
+                border-color: var(--border);
+                background: var(--surface2);
+                color: var(--text);
+            }
+            .sim-output {
+                min-height: 460px;
+                white-space: pre-wrap;
+                overflow: auto;
+            }
 
             /* ── Event timeline ── */
             .event-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
@@ -551,9 +875,15 @@ def dashboard_html() -> HTMLResponse:
                 background: var(--surface2) !important;
                 border: 1px solid var(--border);
                 color: var(--text);
-                font-family: 'Fira Mono', 'Consolas', monospace;
+                font-family: 'JetBrains Mono', 'Consolas', monospace;
             }
-            code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-family: monospace; font-size: 0.88em; }
+            code { background: var(--surface2); padding: 1px 5px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.88em; }
+
+            @media (max-width: 1024px) {
+                .split { grid-template-columns: 1fr; }
+                .controls .meta { width: 100%; margin-left: 0; }
+                .sim-grid { grid-template-columns: 1fr; }
+            }
 
             /* ── Footer ── */
             .footer {
@@ -575,38 +905,62 @@ def dashboard_html() -> HTMLResponse:
                     Auditrix
                     <span class="feature-badge">⚡ Live</span>
                 </h1>
-                <p>OpenEnv-compliant AI agent benchmark for real-world compliance auditing — now with dynamic incident mechanics, structured explainability, and event-aware grading.</p>
+                <p>OpenEnv-compliant AI agent benchmark for compliance auditing with dynamic incidents, evidence-aware grading, and long-horizon RL evaluation.</p>
             </div>
             <div class="header-right">
                 <button class="theme-btn" id="themeBtn" title="Toggle dark mode" aria-label="Toggle dark mode"></button>
             </div>
         </div>
 
+        <div class="tabs" role="tablist" aria-label="Dashboard tabs">
+            <button class="tab-btn active" data-tab="report" id="tabReport">Report</button>
+            <button class="tab-btn" data-tab="simulation" id="tabSimulation">Simulation</button>
+        </div>
+
+        <div class="tab-panel active" id="panel-report">
+        <div class="overview-grid">
+            <div class="overview-card">
+                <div class="k">Latest Log Timestamp</div>
+                <div class="v">__LATEST_TIMESTAMP__</div>
+                <div class="s">Auto-read from inference_runs.jsonl</div>
+            </div>
+            <div class="overview-card">
+                <div class="k">Best Recorded Score</div>
+                <div class="v">__TOP_SCORE__</div>
+                <div class="s">Highest score across all recorded runs</div>
+            </div>
+            <div class="overview-card">
+                <div class="k">Unique Models</div>
+                <div class="v">__MODEL_COUNT__</div>
+                <div class="s">Models compared in this dashboard</div>
+            </div>
+        </div>
+
         <!-- Stat cards -->
         <div class="stats">
             <div class="stat">
-                <div class="stat-n">7</div>
+                <div class="stat-n">__TASK_COUNT__</div>
                 <div class="stat-l">Tasks</div>
             </div>
             <div class="stat">
-                <div class="stat-n">4</div>
+                <div class="stat-n">__DIFFICULTY_COUNT__</div>
                 <div class="stat-l">Difficulty Tiers</div>
             </div>
             <div class="stat">
-                <div class="stat-n">10</div>
+                <div class="stat-n">__RULE_COUNT__</div>
                 <div class="stat-l">Compliance Rules</div>
             </div>
             <div class="stat">
-                <div class="stat-n">3</div>
-                <div class="stat-l">Event Types</div>
+                <div class="stat-n">__RUN_COUNT__</div>
+                <div class="stat-l">Recorded Runs</div>
             </div>
             <div class="stat">
-                <div class="stat-n">62</div>
-                <div class="stat-l">Tests Passing</div>
+                <div class="stat-n">__MEAN_SCORE__</div>
+                <div class="stat-l">Mean Score</div>
             </div>
             <div class="stat">
-                <div class="stat-n">[0, 1]</div>
-                <div class="stat-l">Score Range</div>
+                <div class="stat-n">__SUCCESS_RATE__</div>
+                <div class="stat-l">Success Rate</div>
             </div>
         </div>
 
@@ -619,7 +973,7 @@ def dashboard_html() -> HTMLResponse:
             <span class="feat new">Loop Detection</span>
             <span class="feat new">Variance Reporting (--seeds N)</span>
             <span class="feat new">Extreme Task</span>
-            <span class="feat">R1-R10 Rules</span>
+            <span class="feat">R1-R11 Rules</span>
             <span class="feat">SOX · GDPR · FLSA</span>
             <span class="feat">OpenEnv Compatible</span>
         </div>
@@ -639,62 +993,7 @@ def dashboard_html() -> HTMLResponse:
                     </tr>
                 </thead>
                 <tbody>
-                    <tr>
-                        <td><code>easy_basic_audit</code></td>
-                        <td><span class="pill pill-easy">🟢 Easy</span></td>
-                        <td>5</td>
-                        <td>R1, R2</td>
-                        <td>25</td>
-                        <td><span class="ev ev-outage">OUTAGE</span></td>
-                    </tr>
-                    <tr>
-                        <td><code>medium_mixed_audit</code></td>
-                        <td><span class="pill pill-medium">🟡 Medium</span></td>
-                        <td>12</td>
-                        <td>R1-R4</td>
-                        <td>50</td>
-                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-outage">OUTAGE</span></td>
-                    </tr>
-                    <tr>
-                        <td><code>hard_complex_audit</code></td>
-                        <td><span class="pill pill-hard">🔴 Hard</span></td>
-                        <td>20</td>
-                        <td>R1-R5</td>
-                        <td>100</td>
-                        <td><span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
-                    </tr>
-                    <tr>
-                        <td><code>finance_sox_audit</code></td>
-                        <td><span class="pill pill-hard">🔴 Hard</span></td>
-                        <td>15</td>
-                        <td>R3, R6-R8</td>
-                        <td>80</td>
-                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
-                    </tr>
-                    <tr>
-                        <td><code>gdpr_privacy_audit</code></td>
-                        <td><span class="pill pill-medium">🟡 Medium</span></td>
-                        <td>10</td>
-                        <td>R5, R8, R9</td>
-                        <td>50</td>
-                        <td><span class="ev ev-amend">AMEND</span> <span class="ev ev-outage">OUTAGE</span></td>
-                    </tr>
-                    <tr>
-                        <td><code>data_integrity_audit</code></td>
-                        <td><span class="pill pill-medium">🟡 Medium</span></td>
-                        <td>8</td>
-                        <td>R3, R4, R10</td>
-                        <td>40</td>
-                        <td><span class="ev ev-amend">AMEND</span></td>
-                    </tr>
-                    <tr style="background: linear-gradient(90deg, var(--surface2), var(--surface));">
-                        <td><code>regulatory_storm_audit</code> ⭐</td>
-                        <td><span class="pill pill-extreme">🟣 Extreme</span></td>
-                        <td>25</td>
-                        <td>R1-R10 (all)</td>
-                        <td>120</td>
-                        <td><span class="ev ev-policy">POLICY</span> <span class="ev ev-policy">POLICY</span> <span class="ev ev-outage">OUTAGE</span> <span class="ev ev-outage">OUTAGE</span> <span class="ev ev-amend">AMEND</span> <span class="ev ev-amend">AMEND</span></td>
-                    </tr>
+                    __TASK_ROWS__
                 </tbody>
             </table>
         </div>
@@ -727,29 +1026,46 @@ def dashboard_html() -> HTMLResponse:
             </div>
         </div>
 
-        <!-- Baseline Scores -->
-        <div class="section">
-            <h2>📊 Baseline Scores <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(Qwen 2.5 72B, temp=0, seed=42)</span></h2>
-            <table>
-                <thead>
-                    <tr><th>Task</th><th>Difficulty</th><th>Score</th><th>Primary Failure Mode</th></tr>
-                </thead>
-                <tbody>
-                    <tr><td><code>easy_basic_audit</code></td><td><span class="pill pill-easy">Easy</span></td><td><strong>0.92</strong></td><td><span class="fm-badge fm-none">none</span></td></tr>
-                    <tr><td><code>medium_mixed_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.75</strong></td><td><span class="fm-badge fm-false_positive">false_positive</span></td></tr>
-                    <tr><td><code>hard_complex_audit</code></td><td><span class="pill pill-hard">Hard</span></td><td><strong>0.58</strong></td><td><span class="fm-badge fm-missed_violation">missed_violation</span></td></tr>
-                    <tr><td><code>finance_sox_audit</code></td><td><span class="pill pill-hard">Hard</span></td><td><strong>0.61</strong></td><td><span class="fm-badge fm-report_inconsistency">report_inconsistency</span></td></tr>
-                    <tr><td><code>gdpr_privacy_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.72</strong></td><td><span class="fm-badge fm-false_positive">false_positive</span></td></tr>
-                    <tr><td><code>data_integrity_audit</code></td><td><span class="pill pill-medium">Medium</span></td><td><strong>0.74</strong></td><td><span class="fm-badge fm-missed_violation">missed_violation</span></td></tr>
-                    <tr><td><code>regulatory_storm_audit</code> ⭐</td><td><span class="pill pill-extreme">Extreme</span></td><td><strong>0.31</strong></td><td><span class="fm-badge fm-low_coverage">low_coverage</span></td></tr>
-                    <tr class="avg-row"><td>Overall Average</td><td></td><td><strong>0.66</strong></td><td></td></tr>
-                </tbody>
-            </table>
+        <div class="split">
+            <div class="section">
+                <h2>📊 Latest Scores By Task <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(most recent run per task)</span></h2>
+                <table>
+                    <thead>
+                        <tr><th>Task</th><th>Difficulty</th><th>Score</th><th>Primary Failure Mode</th></tr>
+                    </thead>
+                    <tbody>
+                        __BASELINE_ROWS__
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="section">
+                <h2>🏁 Model Leaderboard <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(top by average score)</span></h2>
+                <table>
+                    <thead>
+                        <tr><th>#</th><th>Model</th><th>Avg Score</th><th>Runs</th><th>Best</th></tr>
+                    </thead>
+                    <tbody>
+                        __LEADERBOARD_ROWS__
+                    </tbody>
+                </table>
+            </div>
         </div>
 
         <!-- Model Comparison -->
         <div class="section">
             <h2>Model Comparison <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(click row to expand rewards)</span></h2>
+            <div class="controls">
+                <select id="taskFilter">
+                    <option value="">All tasks</option>
+                    __TASK_OPTIONS__
+                </select>
+                <select id="modelFilter">
+                    <option value="">All models</option>
+                    __MODEL_OPTIONS__
+                </select>
+                <div class="meta"><span class="score-chip">Mean __MEAN_SCORE__ · Success __SUCCESS_RATE__</span></div>
+            </div>
             <table id="mcTable" class="mc-table">
                 <thead>
                     <tr>
@@ -825,6 +1141,47 @@ curl -X POST http://localhost:7860/step \\
         <div class="footer">
             <p>Auditrix &nbsp;·&nbsp; <a href="https://github.com/Kowshikv07/Auditrix">GitHub</a> &nbsp;·&nbsp; OpenEnv Framework &nbsp;·&nbsp; 62 tests passing  </p>
         </div>
+        </div>
+
+        <div class="tab-panel" id="panel-simulation">
+            <div class="section">
+                <h2>🧪 Simulation Playground <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(interactive reset / step)</span></h2>
+                <div class="sim-grid">
+                    <div class="sim-card">
+                        <h3>Episode Controls</h3>
+                        <div class="sim-field">
+                            <label for="simTask">Task</label>
+                            <select id="simTask">
+                                __TASK_OPTIONS__
+                            </select>
+                        </div>
+                        <div class="sim-field">
+                            <label for="simSeed">Seed</label>
+                            <input id="simSeed" type="number" value="42" />
+                        </div>
+                        <div class="sim-actions">
+                            <button class="sim-btn" id="simResetBtn">Reset Episode</button>
+                            <button class="sim-btn secondary" id="simHealthBtn">Check Health</button>
+                        </div>
+
+                        <h3 style="margin-top:14px;">Step Action</h3>
+                        <div class="sim-field">
+                            <label for="simAction">Action JSON</label>
+                            <textarea id="simAction">{"action_type":"inspect_record","record_id":"E001"}</textarea>
+                        </div>
+                        <div class="sim-actions">
+                            <button class="sim-btn" id="simStepBtn">Send Step</button>
+                            <button class="sim-btn secondary" id="simClearBtn">Clear Output</button>
+                        </div>
+                    </div>
+
+                    <div class="sim-card">
+                        <h3>Simulation Output</h3>
+                        <pre class="sim-output" id="simOutput">Ready. Use "Reset Episode" to start.</pre>
+                    </div>
+                </div>
+            </div>
+        </div>
 
     </div><!-- /page -->
 
@@ -849,10 +1206,125 @@ curl -X POST http://localhost:7860/step \\
         document.addEventListener('click', e => {
             if (!e.target.closest('#mcTable')) collapseAll();
         });
+
+        // Filters
+        const taskFilter = document.getElementById('taskFilter');
+        const modelFilter = document.getElementById('modelFilter');
+
+        const applyFilters = () => {
+            const taskVal = (taskFilter?.value || '').trim();
+            const modelVal = (modelFilter?.value || '').trim();
+
+            rows.forEach(row => {
+                const taskMatch = !taskVal || row.dataset.task === taskVal;
+                const modelMatch = !modelVal || row.dataset.model === modelVal;
+                row.classList.toggle('hidden', !(taskMatch && modelMatch));
+            });
+        };
+
+        taskFilter?.addEventListener('change', applyFilters);
+        modelFilter?.addEventListener('change', applyFilters);
+        applyFilters();
+
+        // Tab switching
+        const tabButtons = document.querySelectorAll('.tab-btn');
+        const panels = {
+            report: document.getElementById('panel-report'),
+            simulation: document.getElementById('panel-simulation')
+        };
+        tabButtons.forEach(btnEl => {
+            btnEl.addEventListener('click', () => {
+                const tab = btnEl.dataset.tab;
+                tabButtons.forEach(b => b.classList.remove('active'));
+                btnEl.classList.add('active');
+                Object.values(panels).forEach(p => p?.classList.remove('active'));
+                panels[tab]?.classList.add('active');
+            });
+        });
+
+        // Simulation API playground
+        const simTask = document.getElementById('simTask');
+        const simSeed = document.getElementById('simSeed');
+        const simAction = document.getElementById('simAction');
+        const simOutput = document.getElementById('simOutput');
+        const simResetBtn = document.getElementById('simResetBtn');
+        const simStepBtn = document.getElementById('simStepBtn');
+        const simHealthBtn = document.getElementById('simHealthBtn');
+        const simClearBtn = document.getElementById('simClearBtn');
+
+        const writeSim = (title, payload) => {
+            const ts = new Date().toISOString();
+            const text = `[${ts}] ${title}\n${typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2)}\n\n`;
+            simOutput.textContent = text + simOutput.textContent;
+        };
+
+        const callJson = async (url, options = {}) => {
+            const res = await fetch(url, options);
+            const text = await res.text();
+            let data;
+            try {
+                data = JSON.parse(text);
+            } catch {
+                data = text;
+            }
+            return { ok: res.ok, status: res.status, data };
+        };
+
+        simResetBtn?.addEventListener('click', async () => {
+            const body = {
+                task_id: (simTask?.value || '').trim() || null,
+                seed: Number(simSeed?.value || 42)
+            };
+            const res = await callJson('/reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            writeSim(`POST /reset -> ${res.status}`, res.data);
+        });
+
+        simStepBtn?.addEventListener('click', async () => {
+            let actionBody;
+            try {
+                actionBody = JSON.parse(simAction?.value || '{}');
+            } catch (e) {
+                writeSim('Invalid action JSON', String(e));
+                return;
+            }
+            const res = await callJson('/step', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(actionBody)
+            });
+            writeSim(`POST /step -> ${res.status}`, res.data);
+        });
+
+        simHealthBtn?.addEventListener('click', async () => {
+            const res = await callJson('/health');
+            writeSim(`GET /health -> ${res.status}`, res.data);
+        });
+
+        simClearBtn?.addEventListener('click', () => {
+            simOutput.textContent = 'Cleared.';
+        });
     </script>
     </body>
     </html>
     """
+    html_content = html_content.replace("__TASK_COUNT__", str(task_count))
+    html_content = html_content.replace("__DIFFICULTY_COUNT__", str(difficulty_count))
+    html_content = html_content.replace("__RULE_COUNT__", str(rule_count))
+    html_content = html_content.replace("__RUN_COUNT__", str(total_runs))
+    html_content = html_content.replace("__MEAN_SCORE__", f"{mean_score:.3f}")
+    html_content = html_content.replace("__SUCCESS_RATE__", f"{success_rate:.1f}%")
+    html_content = html_content.replace("__TASK_ROWS__", task_rows)
+    html_content = html_content.replace("__BASELINE_ROWS__", baseline_rows)
+    html_content = html_content.replace("__TASK_OPTIONS__", task_options)
+    html_content = html_content.replace("__MODEL_OPTIONS__", model_options)
+    html_content = html_content.replace("__TOP_SCORE__", f"{top_score:.3f}")
+    html_content = html_content.replace("__MODEL_COUNT__", str(len(models)))
+    html_content = html_content.replace("__LEADERBOARD_ROWS__", leaderboard_rows)
+    html_content = html_content.replace("__LATEST_TIMESTAMP__", escape(latest_timestamp))
     html_content = html_content.replace("__MODEL_COMPARISON_ROWS__", model_rows)
     return HTMLResponse(content=html_content)
 
