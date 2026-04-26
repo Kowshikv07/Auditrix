@@ -233,10 +233,32 @@ def dashboard_html() -> HTMLResponse:
     baseline_rows = ""
     task_rows = ""
     leaderboard_rows = ""
+    compare_rows = ""
     parsed_runs: List[Dict[str, Any]] = []
     latest_by_task: Dict[str, Dict[str, Any]] = {}
+    latest_by_task_type: Dict[str, Dict[str, Dict[str, Any]]] = {}
     latest_timestamp = "-"
     models: set[str] = set()
+
+    def _infer_run_type(item: Dict[str, Any]) -> str:
+        explicit = str(item.get("run_type", "")).strip().lower()
+        if explicit in {"baseline", "untrained", "trained"}:
+            return "baseline" if explicit in {"baseline", "untrained"} else "trained"
+
+        model_value = str(item.get("model", "")).lower()
+        trained_markers = (
+            "grpo",
+            "lora",
+            "adapter",
+            "finetuned",
+            "fine-tuned",
+            "trained",
+            "auditrix-grpo",
+            "checkpoint",
+        )
+        if any(marker in model_value for marker in trained_markers):
+            return "trained"
+        return "baseline"
 
     if logs_file.exists():
         with open(logs_file, "r", encoding="utf-8") as f:
@@ -264,6 +286,15 @@ def dashboard_html() -> HTMLResponse:
                     if prev is None or ts > prev_ts:
                         latest_by_task[task_id] = item
 
+                run_type = _infer_run_type(item)
+                item["_run_type"] = run_type
+                if task_id:
+                    typed = latest_by_task_type.setdefault(task_id, {})
+                    prev_typed = typed.get(run_type)
+                    prev_typed_ts = str(prev_typed.get("timestamp", "")) if prev_typed else ""
+                    if prev_typed is None or ts > prev_typed_ts:
+                        typed[run_type] = item
+
                 rewards = item.get("rewards", [])
                 if isinstance(rewards, list):
                     rewards_preview = ", ".join(str(value) for value in rewards[:2])
@@ -282,10 +313,12 @@ def dashboard_html() -> HTMLResponse:
                     "<tr class=\"mc-row\" "
                     f"data-task=\"{escape(task_id.lower())}\" "
                     f"data-model=\"{escape(model_name.lower())}\" "
-                    f"data-failure=\"{escape(failure_slug)}\">"
+                    f"data-failure=\"{escape(failure_slug)}\" "
+                    f"data-run-type=\"{escape(run_type)}\">"
                     f"<td>{escape(str(item.get('timestamp', '')))}</td>"
                     f"<td>{escape(str(item.get('task_id', '')))}</td>"
                     f"<td>{escape(str(item.get('model', '')))}</td>"
+                    f"<td><span class=\"rt-badge rt-{escape(run_type)}\">{escape(run_type)}</span></td>"
                     f"<td>{escape(str(seed_val))}</td>"
                     f"<td>{escape(str(item.get('score', '')))}</td>"
                     f"<td>{escape(str(item.get('steps', '')))}</td>"
@@ -299,7 +332,7 @@ def dashboard_html() -> HTMLResponse:
                 )
 
     if not model_rows:
-        model_rows = "<tr><td colspan=\"9\">No benchmark records found. Run <code>python inference.py</code> to generate data.</td></tr>"
+        model_rows = "<tr><td colspan=\"10\">No benchmark records found. Run <code>python inference.py</code> to generate data.</td></tr>"
 
     task_count = len(TASKS)
     difficulty_count = len({task.difficulty for task in TASKS.values()})
@@ -433,6 +466,34 @@ def dashboard_html() -> HTMLResponse:
             "<td></td>"
             "</tr>"
         )
+
+    for task_id, task in TASKS.items():
+        typed = latest_by_task_type.get(task_id, {})
+        baseline_item = typed.get("baseline")
+        trained_item = typed.get("trained")
+        baseline_score = float(baseline_item.get("score", 0.0)) if baseline_item else None
+        trained_score = float(trained_item.get("score", 0.0)) if trained_item else None
+
+        delta_html = "-"
+        if baseline_score is not None and trained_score is not None:
+            delta = trained_score - baseline_score
+            delta_class = "delta-pos" if delta >= 0 else "delta-neg"
+            sign = "+" if delta >= 0 else ""
+            delta_html = f'<span class="{delta_class}">{sign}{delta:.3f}</span>'
+
+        baseline_cell = f"<td>{baseline_score:.3f}</td>" if baseline_score is not None else "<td>-</td>"
+        trained_cell = f"<td>{trained_score:.3f}</td>" if trained_score is not None else "<td>-</td>"
+        compare_rows += (
+            "<tr>"
+            f"<td><code>{escape(task_id)}</code></td>"
+            f"{baseline_cell}"
+            f"{trained_cell}"
+            f"<td>{delta_html}</td>"
+            "</tr>"
+        )
+
+    if not compare_rows:
+        compare_rows = "<tr><td colspan=\"4\">No baseline/trained comparison data yet.</td></tr>"
 
     task_options = "".join(
         f'<option value="{escape(task_id.lower())}">{escape(task_id)}</option>'
@@ -724,6 +785,15 @@ def dashboard_html() -> HTMLResponse:
             body.dark .fm-none               { background: #14532d; color: #86efac; }
             body.dark .fm-false_positive     { background: #450a0a; color: #fca5a5; }
             body.dark .fm-missed_violation   { background: #451a03; color: #fcd34d; }
+
+            .rt-badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.72rem; font-weight: 700; text-transform: uppercase; }
+            .rt-baseline { background: #dbeafe; color: #1e40af; }
+            .rt-trained { background: #dcfce7; color: #166534; }
+            body.dark .rt-baseline { background: #1e3a5f; color: #93c5fd; }
+            body.dark .rt-trained { background: #14532d; color: #86efac; }
+
+            .delta-pos { color: #15803d; font-weight: 800; }
+            .delta-neg { color: #dc2626; font-weight: 800; }
 
             /* ── Model comparison table ── */
             .mc-row { cursor: pointer; }
@@ -1052,6 +1122,18 @@ def dashboard_html() -> HTMLResponse:
             </div>
         </div>
 
+        <div class="section">
+            <h2>🧠 Baseline vs Trained Inference <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(latest per task; delta = trained - baseline)</span></h2>
+            <table>
+                <thead>
+                    <tr><th>Task</th><th>Baseline</th><th>Trained</th><th>Delta</th></tr>
+                </thead>
+                <tbody>
+                    __COMPARE_ROWS__
+                </tbody>
+            </table>
+        </div>
+
         <!-- Model Comparison -->
         <div class="section">
             <h2>Model Comparison <span style="font-weight:400;font-size:0.83rem;color:var(--text2)">(click row to expand rewards)</span></h2>
@@ -1072,6 +1154,7 @@ def dashboard_html() -> HTMLResponse:
                         <th>Timestamp</th>
                         <th>Task</th>
                         <th>Model</th>
+                        <th>Run Type</th>
                         <th>Seed</th>
                         <th>Score</th>
                         <th>Steps</th>
@@ -1324,6 +1407,7 @@ curl -X POST http://localhost:7860/step \\
     html_content = html_content.replace("__TOP_SCORE__", f"{top_score:.3f}")
     html_content = html_content.replace("__MODEL_COUNT__", str(len(models)))
     html_content = html_content.replace("__LEADERBOARD_ROWS__", leaderboard_rows)
+    html_content = html_content.replace("__COMPARE_ROWS__", compare_rows)
     html_content = html_content.replace("__LATEST_TIMESTAMP__", escape(latest_timestamp))
     html_content = html_content.replace("__MODEL_COMPARISON_ROWS__", model_rows)
     return HTMLResponse(content=html_content)
